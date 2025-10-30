@@ -1,1 +1,1 @@
-Diplomatiki odykon TDMPC with optimized optimziation
+Diplomatiki odykon TDMPC with optimized optimization
