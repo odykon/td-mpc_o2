@@ -239,10 +239,10 @@ class ReplayBuffer():
     Storage and sampling functionality for training TD-MPC / TOLD.
     The replay buffer is stored in GPU memory when training from state.
     Uses prioritized experience replay by default."""
-    def __init__(self, cfg):
+    def __init__(self, cfg, capacity=None):
         self.cfg = cfg
         self.device = torch.device(cfg.device)
-        self.capacity = min(cfg.train_steps, cfg.max_buffer_size)
+        self.capacity = capacity if capacity is not None else min(cfg.train_steps, cfg.max_buffer_size)    #ody
         dtype = torch.float32 if cfg.modality == 'state' else torch.uint8
         obs_shape = cfg.obs_shape if cfg.modality == 'state' else (3, *cfg.obs_shape[-2:])
         self._obs = torch.empty((self.capacity+1, *obs_shape), dtype=dtype, device=self.device)
