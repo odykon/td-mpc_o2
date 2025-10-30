@@ -7,28 +7,134 @@ from omegaconf import OmegaConf
 import json
 import requests
 
-def save_results(cfg, all_metrics, base_dir="results", timezone="Europe/Athens"):
-    # Create readable date-time string (no seconds)
+import numpy as np
+import torch
+import imageio
+import os
+
+def make_save_dir_path(cfg, base_dir="results", timezone="Europe/Athens"):
     local_time = datetime.now(ZoneInfo(timezone))
     timestamp = local_time.strftime("%Y-%m-%d_%Hh%M")
-
     exp_name = getattr(cfg, "exp_name", "experiment")
     save_dir = os.path.join(base_dir, f"{exp_name}_{timestamp}")
+    return save_dir
+
+def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mode="none"):
+    """
+    Evaluate the agent and optionally save videos.
+
+    Args:
+        env: Environment (DMControl or Gym-like)
+        agent: Agent with DCEMethod(obs, step, t0)
+        cfg: Config (optional)
+        step: Current training step number
+        n_episodes: Number of evaluation episodes
+        save_dir: Directory where videos are saved (optional)
+        video_mode: "first", "best_worst", or "none"
+
+    Returns:
+        eval_metrics (dict): Evaluation statistics and episode rewards.
+    """
+    assert video_mode in {"first", "best_worst", "none"}, \
+        "video_mode must be one of: 'first', 'best_worst', 'none'"
+
+    episode_rewards = []
+    episode_frames = [] if video_mode == "best_worst" else None
+
+    # Create video folder if needed
+    video_dir = None
+    if save_dir and video_mode != "none":
+        video_dir = os.path.join(save_dir, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+
+    for ep in range(n_episodes):
+        obs = env.reset()
+        done = False
+        total_reward = 0.0
+        step_in_ep = 0
+
+        # Decide if this episode should record frames
+        record = (video_mode == "first" and ep == 0) or (video_mode == "best_worst")
+        frames = [] if record else None
+
+        while not done:
+            with torch.no_grad():
+                action, _, _, _, _ = agent.DCEMethod(obs, step=step_in_ep, t0=(step_in_ep == 0))
+            obs, reward, done, _ = env.step(action.cpu().numpy())
+            total_reward += reward
+            step_in_ep += 1
+
+            if record:
+                try:
+                    frame = env.render(mode='rgb_array', height=480, width=640, camera_id=0)
+                except TypeError:
+                    frame = env.render(mode='rgb_array')
+                frames.append(frame)
+
+        episode_rewards.append(total_reward)
+        if video_mode == "best_worst":
+            episode_frames.append(frames)
+
+        print(f"Episode {ep+1}/{n_episodes}: Reward = {total_reward:.3f}")
+
+        # Save video if mode="first"
+        if video_mode == "first" and ep == 0 and video_dir:
+            video_path = os.path.join(video_dir, f"eval_step{step}_ep{ep+1:03d}.mp4")
+            imageio.mimsave(video_path, frames, fps=30)
+            print(f"🎥 Saved first episode video: {video_path}")
+
+    # --- Handle best/worst video saving ---
+    if video_mode == "best_worst" and video_dir and n_episodes > 0:
+        best_idx = int(np.argmax(episode_rewards))
+        worst_idx = int(np.argmin(episode_rewards))
+
+        # Save best
+        best_path = os.path.join(video_dir, f"eval_step{step}_best_ep{best_idx+1:03d}.mp4")
+        imageio.mimsave(best_path, episode_frames[best_idx], fps=30)
+        print(f"🏆 Saved best episode video: {best_path}")
+
+        # Save worst
+        worst_path = os.path.join(video_dir, f"eval_step{step}_worst_ep{worst_idx+1:03d}.mp4")
+        imageio.mimsave(worst_path, episode_frames[worst_idx], fps=30)
+        print(f"💀 Saved worst episode video: {worst_path}")
+
+    # --- Compute statistics ---
+    mean_reward = float(np.mean(episode_rewards))
+    std_reward = float(np.std(episode_rewards))
+
+    eval_metrics = {
+        "step": int(step),
+        "mean_reward": mean_reward,
+        "std_reward": std_reward,
+    }
+    for i, r in enumerate(episode_rewards, start=1):
+        eval_metrics[f"ep{i}_reward"] = float(r)
+
+    print(f"\nEvaluation Summary — Step {step}")
+    print("-" * 25)
+    print(f"Mean Reward: {mean_reward:.3f}")
+    print(f"Std Reward:  {std_reward:.3f}")
+
+    return eval_metrics
+
+def save_results(cfg, all_metrics, save_dir):
     os.makedirs(save_dir, exist_ok=True)
 
-    # Convert config and save
-    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-    pd.DataFrame(list(cfg_dict.items()), columns=["key", "value"]).to_csv(
-        os.path.join(save_dir, "config.csv"), index=False
-    )
+    # Save config once
+    cfg_path = os.path.join(save_dir, "config.csv")
+    if not os.path.exists(cfg_path):
+        cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+        pd.DataFrame(list(cfg_dict.items()), columns=["key", "value"]).to_csv(cfg_path, index=False)
 
-    # Save metrics
-    pd.DataFrame(all_metrics).to_csv(os.path.join(save_dir, "metrics.csv"), index=False)
+    # Append or create metrics.csv
+    metrics_path = os.path.join(save_dir, "metrics.csv")
+    df = pd.DataFrame(all_metrics if isinstance(all_metrics, list) else [all_metrics])
+    if os.path.exists(metrics_path):
+        df.to_csv(metrics_path, mode="a", header=False, index=False)
+    else:
+        df.to_csv(metrics_path, index=False)
 
-    print(f"\n✅ Saved training results (Athens time) to:\n  {save_dir}")
-    print("  ├── config.csv")
-    print("  └── metrics.csv")
-
+    print(f"✅ Results saved to: {save_dir}")
     return save_dir
 
 
