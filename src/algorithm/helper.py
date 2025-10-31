@@ -316,6 +316,98 @@ class ReplayBuffer():
                 action.cuda(), reward.cuda(), idxs.cuda(), weights.cuda()
 
         return obs, next_obs, action, reward.unsqueeze(2), idxs, weights
+        
+    def sample_new(self, n=None):
+        # Compute base probabilities
+        probs = (self._priorities if self._full else self._priorities[:self.idx]) ** self.cfg.per_alpha
+        probs /= probs.sum()
+        total = len(probs)
+    
+        if n is None:
+            # Regular prioritized sampling over entire buffer
+            idxs = torch.from_numpy(np.random.choice(
+                total, self.cfg.batch_size,
+                p=probs.cpu().numpy(),
+                replace=not self._full
+            )).to(self.device)
+    
+        else:
+            # --- sample from the n most recent transitions ---
+            end = self.idx
+            start = (end - n) % self.capacity  # wrap-safe
+    
+            if not self._full or start < end:
+                # contiguous region (no wrap-around)
+                rel_probs = (self._priorities[start:end] ** self.cfg.per_alpha)
+                rel_probs /= rel_probs.sum()
+                rel_idxs = np.random.choice(
+                    len(rel_probs), self.cfg.batch_size,
+                    p=rel_probs.cpu().numpy(), replace=False
+                )
+                idxs = torch.from_numpy(rel_idxs + start).to(self.device)
+            else:
+                # 🔁 wrapped region (latest data split in two)
+                tail_len = self.capacity - start
+                head_len = end
+                # concatenate wrapped slices
+                rel_probs = torch.cat([
+                    self._priorities[start:] ** self.cfg.per_alpha,
+                    self._priorities[:end] ** self.cfg.per_alpha
+                ])
+                rel_probs /= rel_probs.sum()
+                rel_idxs = np.random.choice(
+                    len(rel_probs), self.cfg.batch_size,
+                    p=rel_probs.cpu().numpy(), replace=False
+                )
+    
+                rel_idxs = torch.from_numpy(rel_idxs).to(self.device)
+                # Map relative indices back to absolute buffer indices
+                idxs = torch.where(
+                    rel_idxs < tail_len,
+                    rel_idxs + start,
+                    rel_idxs - tail_len
+                )
+    
+        # --- compute weights, samples, etc. (same as before) ---
+        weights = (total * probs[idxs]) ** (-self.cfg.per_beta)
+        weights /= weights.max()
+    
+        obs = self._get_obs(self._obs, idxs)
+        next_obs_shape = (
+            self._last_obs.shape[1:]
+            if self.cfg.modality == 'state'
+            else (3*self.cfg.frame_stack, *self._last_obs.shape[-2:])
+        )
+    
+        next_obs = torch.empty(
+            (self.cfg.horizon+1, self.cfg.batch_size, *next_obs_shape),
+            dtype=obs.dtype, device=obs.device
+        )
+        action = torch.empty(
+            (self.cfg.horizon+1, self.cfg.batch_size, *self._action.shape[1:]),
+            dtype=torch.float32, device=self.device
+        )
+        reward = torch.empty(
+            (self.cfg.horizon+1, self.cfg.batch_size),
+            dtype=torch.float32, device=self.device
+        )
+    
+        for t in range(self.cfg.horizon+1):
+            _idxs = (idxs + t) % self.capacity  
+            next_obs[t] = self._get_obs(self._obs, (_idxs + 1) % self.capacity)
+            action[t] = self._action[_idxs]
+            reward[t] = self._reward[_idxs]
+    
+        mask = (_idxs + 1) % self.cfg.episode_length == 0
+        next_obs[-1, mask] = self._last_obs[
+            (_idxs[mask] // self.cfg.episode_length)
+        ].cuda().float()
+        if not action.is_cuda:
+            action, reward, idxs, weights = (
+                action.cuda(), reward.cuda(), idxs.cuda(), weights.cuda()
+            )
+    
+        return obs, next_obs, action, reward.unsqueeze(2), idxs, weights
 
 
 
