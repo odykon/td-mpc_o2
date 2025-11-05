@@ -19,7 +19,7 @@ def make_save_dir_path(cfg, base_dir="results", timezone="Europe/Athens"):
     save_dir = os.path.join(base_dir, f"{exp_name}_{timestamp}")
     return save_dir
 
-def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mode="none"):
+def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None, video_mode="none"):
     """
     Evaluate the agent and optionally save videos.
 
@@ -59,7 +59,10 @@ def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mod
 
         while not done:
             with torch.no_grad():
-                action, _, _, _, _ = agent.DCEMethod(obs, step=step_in_ep, t0=(step_in_ep == 0))
+                if cem: 
+                    action = agent.plan(obs, eval_mode =True, step=step_in_ep, t0=(step_in_ep == 0))
+                else:    
+                    action, _, _, _, _ = agent.DCEMethod(obs, step=step_in_ep, t0=(step_in_ep == 0))
             obs, reward, done, _ = env.step(action.cpu().numpy())
             total_reward += reward
             step_in_ep += 1
