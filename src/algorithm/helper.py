@@ -333,6 +333,7 @@ class ReplayBuffer():
     
         else:
             # --- sample from the n most recent transitions ---
+            n = min(n, total)  # no overflow beyond filled contents
             end = self.idx
             start = (end - n) % self.capacity  # wrap-safe
     
