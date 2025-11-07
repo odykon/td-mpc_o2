@@ -120,7 +120,7 @@ def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None
 
     return eval_metrics
 
-def save_results(cfg, all_metrics, save_dir):
+def save_results(cfg, episode_metrics, save_dir, evaluation_metrics=None, step=None):
     os.makedirs(save_dir, exist_ok=True)
 
     # Save config once
@@ -129,9 +129,27 @@ def save_results(cfg, all_metrics, save_dir):
         cfg_dict = OmegaConf.to_container(cfg, resolve=True)
         pd.DataFrame(list(cfg_dict.items()), columns=["key", "value"]).to_csv(cfg_path, index=False)
 
-    # Append or create metrics.csv
+    # Combine episode + eval metrics
+    all_metrics = episode_metrics.copy()
+
+    if evaluation_metrics is not None:
+        # Merge evaluation metrics into the same row
+        all_metrics.update(evaluation_metrics)
+    else:
+        # If no evaluation, ensure eval_* keys exist (filled with NaN)
+        all_metrics.update({
+            "eval_reward": np.nan,
+            "eval_success_rate": np.nan
+        })
+
+    # Add step and timestamp
+    if step is not None:
+        all_metrics["step"] = step
+    all_metrics["timestamp"] = datetime.now().isoformat(timespec="seconds")
+
+    # Save to CSV (append or create)
     metrics_path = os.path.join(save_dir, "metrics.csv")
-    df = pd.DataFrame(all_metrics if isinstance(all_metrics, list) else [all_metrics])
+    df = pd.DataFrame([all_metrics])
     if os.path.exists(metrics_path):
         df.to_csv(metrics_path, mode="a", header=False, index=False)
     else:
@@ -139,6 +157,7 @@ def save_results(cfg, all_metrics, save_dir):
 
     print(f"✅ Results saved to: {save_dir}")
     return save_dir
+
 
 
 def save_model_and_buffer(agent, buffer, save_dir, model_name="model", buffer_name="replay_buffer"):
