@@ -35,6 +35,46 @@ def build_action_decoder(cfg, initialize_fn=None, use_latent_state=True):
 
     return action_decoder
 
+def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, h):
+    """
+    Initializes decoder layers so that each horizon step maps directly from
+    latent action to action, forming a blockwise identity mapping.
+
+    Args:
+        decoder: Sequential model (Linear -> ReLU -> Linear -> Tanh)
+        d_u: latent_action_dim
+        d_z: latent_dim (0 if latent state not used)
+        d_a: action_dim
+        h: horizon
+    """
+    fc1, relu, fc2, tanh = decoder
+
+    with torch.no_grad():
+        # Zero initialization
+        nn.init.zeros_(fc1.weight)
+        nn.init.zeros_(fc1.bias)
+        nn.init.zeros_(fc2.weight)
+        nn.init.zeros_(fc2.bias)
+
+        # Only map latent_action portion — latent_state (if present) is ignored
+        for t in range(h):
+            for i in range(d_a):
+                latent_idx = t * d_a + i
+                if latent_idx >= d_u:
+                    continue  # Skip if beyond latent_action_dim
+
+                fc1.weight[2 * latent_idx, latent_idx] = 1.0
+                fc1.weight[2 * latent_idx + 1, latent_idx] = -1.0
+
+                out_idx = t * d_a + i
+                fc2.weight[out_idx, 2 * latent_idx] = 1.0
+                fc2.weight[out_idx, 2 * latent_idx + 1] = -1.0
+
+        # Small noise to break symmetry
+        fc1.weight += 1e-3 * torch.randn_like(fc1.weight)
+        fc2.weight += 1e-3 * torch.randn_like(fc2.weight)
+
+    return decoder
 
 def action_decoder_DDPG_update(self, obs, u_mean, horizon):
     self.action_dec_optim.zero_grad()
