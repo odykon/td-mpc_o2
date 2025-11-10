@@ -247,6 +247,19 @@ class TDMPC():
         self.pi_optim.step()
         self.model.track_q_grad(True)
         return pi_loss.item()
+        
+    def action_decoder_DDPG_update(self, obs, u_mean, horizon):
+        self.action_dec_optim.zero_grad()
+        z= self.model.h(obs)
+        z = z.detach()
+        
+        sequence = self.model.decode_sequence(u_mean, z)  #unsqueeze(0) for no batch version
+        value = self.estimate_value(z, sequence, horizon).nan_to_num(0)
+        cost = -value.mean()
+    
+        cost.backward()
+        self.action_dec_optim.step()
+        return cost.item()
     
     @torch.no_grad()
     def _td_target(self, next_obs, reward):
