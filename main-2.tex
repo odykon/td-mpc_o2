@@ -1,0 +1,391 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\title{diplomatiki}
+\author{ody kon}
+\date{August 2025}
+\usepackage{amsmath}
+\usepackage{amssymb} % For \mathbb{E}
+\usepackage{cancel}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\newcommand{\mbf}[1]{\mathbf{#1}}
+
+\begin{document}
+
+\maketitle
+\section{Reinforcement Learning}
+\subsection{Introduction}
+Reinforcement Learning is a class of learning methods that learn to solve tasks solely by interacting with the environment. Inspired by the way humans and animals learn to perform basic tasks, in RL we try to understand how our actions lead to specific outcomes that benefit our goal, essentially through trial and error. This is the fundamental learning mechanism we observe in nature, where organisms learn to move and make decisions based only on environmental feedback. We should therefore be able to solve complex tasks without the need of prior knowledge about the problem. This is contrary to traditional problem-solving methods, such as supervised learning—where we are told what behavior is right and what is wrong—or control theory—where we have knowledge about the inner dynamics of our environment. Learning through interaction is one of the core ideas of intelligence, and cracking it would allow us to craft agents that can solve any well-defined task autonomously.
+
+In the basic Reinforcement Learning (RL) framework, a learning agent interacts with an environment over a sequence of steps. At each step, the agent selects an action which causes the environment to transition to a new state. The agent then receives two pieces of feedback: an observation of the new state and a numerical reward signal. The agent's goal is to maximize the cumulative reward over a number of steps. This is achieved by learning a decision rule referred to as a policy that specifies which action to take for a given observation.
+
+The description above is referred to as the agent–environment interface. The agent encompasses the learning and decision-making process, while the environment consists of everything external to the agent that it interacts with. “External” here means anything the agent cannot arbitrarily control and does not have complete knowledge of. This is different to the common notion of a physical agent i.e. a robot, and here the boundary is drawn closer to the agent. For example, in the case of a robot, certain components of its hardware may be considered part of the environment. The reward specifies the agent’s objective but, since it depends on the environment’s state and is not directly known to the agent, it is generally regarded as part of the environment. In contrast, the policy defines the agent’s behavior and is what we adapt to achieve higher rewards, making it a component of the agent. The state and its dynamics belong to the environment, yet in many cases the agent constructs an internal model of the world, maintaining its own beliefs about the state, dynamics, reward function, and expected returns. This internal world model is considered part of the agent.
+\subsection{Formal Introduction}
+Lets more formally define the concepts above.
+At each time step $t$ the state $s_t$ is a full desctiption of the state of the world. It fully characterizes all information meaningfull to our task about the envirnoment. In most cases the agent does not observe the complete state, it only receives an observation $o_t$ which is a partial description of the state containing information less or equal to the state. The behaviot of the agent is defined by the policy which in general maps observations to actions $a_t$. The action is applied to the environment trasitioning it to a new state $s_{t+1}$ and providing the agent a new observation $o_{t+1}$ and a reward $r_{t+1}$ value. The reward at each time step is calculated by the environment using a reward function $r_t=r(s_t,a_t)$. For simplicity in the following derivation we will assume $o_t=s_t$ and thus the policy is a function of the state $\pi(a_t|s_t)$.
+
+The goal of the agent is to choose a policy $\pi$ in order to maximize the expected return where the return $G_t$ at time step $t$ is the future sum of accumulated rewards:
+\begin{equation}
+G_t= r_t+r_{t+1}+r_{t+2}+...+r_T
+\end{equation}
+Here we have considered an episodic task with length $T$. The expected return starting from state $s_0$ under policy $\pi$ is:
+\begin{equation}
+V_\pi(s=s_0)= \mathbb{E}_{a \sim \pi}[G_0|s=s_0] = \mathbb{E}_\pi[\sum_{t=0}^Tr_t|s=s_0]
+\end{equation}
+Here $V_\pi(s)$ is the value of state $s$ under policy $\pi$ defined by the expected return starting from state s and following policy $\pi$.
+The expectations above are under the policy $\pi$. This more formally means that for a given state produced by the environment dynamics, actions are produced according to our policy $\pi$. Following this policy produces trajectories $\tau= (s_0,a_0,s_1,a_1,..,s_{T+1})$ with probability:
+\begin{equation}
+P(\tau|s_0,\pi) =\prod_{t=0}^Tp_{env}(s_{t+1}|s_t,a_t)\pi(a_t|s_t)
+\end{equation}
+where $p_{env}$ is the 
+
+The function $V_\pi$ is the Value function and is central to solving RL problems.
+We can also define the value of a state-action pair $Q(s_t,a_t)$ as the expected return starting from state $s_t$, executing action $a_t$, and then following policy $\pi$. 
+\begin{equation}
+Q(s=s_t,a=a_t) =\mathbb{E}_{a \sim \pi}[G_0|s=s_t,a=a_t] = \mathbb{E}_\pi[\sum_{t=0}^Tr_t|s=s_t,a=a_t]
+\end{equation}
+The expectation above are defined as under a policy. This means that the actions come from the policy $\pi$ and starting from state $s_0$ a trajectory $\tau=(s_0,a_0,s_1,a_2,...,s_{T-1})$ is produced. Other than the policy the  produced trajectory also depends on the environment dynamics defined as transitions probabilities of states under actions $P(s_{t+1}|s_t,a_t)$ and will be more formally defined below. An expectation under a policy is the same as an expectation under the probability distribution $p(\tau)$ 
+
+
+\section{TDMPC}
+
+TD-MPC is a model-based reinforcement learning (MBRL) method that combines model predictive control (MPC) with a learned world model, policy, and value function. It leverages learned dynamics to perform model predictive path integral (MPPI) control, optimizing latent trajectories over a short-horizon reward and a terminal state value function. This allows the algorithm to incorporate both short-term and long-term returns for improved planning. TDMPC achieves performance comparable to state-of-the-art model-free reinforcement learning algorithms on a range of simulated continuous control tasks, while also exhibiting greater sample efficiency due to the use of the learned model.
+
+\subsection{Latent space planning}
+TD-MPC performs planning in a learned latent state representation using a variation of the Model Predictive Path Integral (MPPI) control algorithm. MPPI is a sampling-based, zeroth-order optimization method for model predictive control. Its objective is to minimize the expected cost of trajectories by iteratively refining a probability distribution over potential control sequences. The method operates by sampling a set of trajectories from the current control distribution and then updating the distribution parameters with a closed-form rule. This update is computed as a cost-weighted average of the sampled control sequences, efficiently shifting the distribution towards low-cost regions.
+
+
+The version used in TD-MPC models the distribution over an action sequence of horizon H as a multivariate Gaussian distribution with diagonal covariance i.e. an independent Gaussian over each action with initial parameters $(\mu_0,\sigma_0)_{t:t+H}, \mu_0,\sigma_0\in R^m, \mathcal{A}\in R^m$. We sample N action sequences and calculate the corresponding trajectories according to the learned dynamics model. For each trajectory  $\Gamma$ we estimate the total return $\phi_\Gamma$
+\begin{equation}
+\phi_{\Gamma} \triangleq \mathbb{E}_{\Gamma} \left[ \gamma^{H}Q_{\theta}(\mathbf{z}_{H},\mathbf{a}_{H}) + \sum_{t=0}^{H-1}\gamma^{t}R_{\theta}(\mathbf{z}_{t},\mathbf{a}_{t}) \right]
+\end{equation}
+The distribution parameters are updated considering only the top-k returns $\phi_\Gamma^*$ with the following update rule: 
+\begin{equation}
+\mu^j = \frac{\sum_{i=1}^k \Omega_i \Gamma_i^*}{\sum_{i=1}^k \Omega_i}, \quad \sigma^j = \sqrt{\frac{\sum_{i=1}^k \Omega_i (\Gamma_i^* - \mu^j)^2}{\sum_{i=1}^k \Omega_i}}
+\end{equation}
+where $\Gamma^\ast_i$ denotes the $i$th top k trajectory with return estimate $\phi^\ast_\Gamma$, $\Omega_i=e^{\tau(\phi^\ast_{\Gamma,i})}$ is the weight corresponding to $\Gamma^\ast_i$ and $\tau$ is a temperature parameter that controls the sharpness of the weight.
+
+The procedure is repeated for a fixed number of iterations $J$, after which we have the final optimized distribution on action sequences. We sample a trajectory from it and execute only the first action in an MPC fashion. At the next time step $t+1$, the procedure is re-initialized using the previous solution, shifting the initial mean parameter $\mu_0$ forward by one step and repeating the planning process.
+\subsection{Model Components}
+The authors use a Task-Oriented Latent Dynamics (TOLD) model that models transitions in a latent state space, along with a reward function, a value function, and a deterministic policy, all operating in the latent space. This model is used to generate rollouts given a starting state and a number of actions, and then to estimate the value of these rollouts. The policy is used to compute optimal actions for the TD-learning targets and to generate trajectories that guide the MPPI.
+
+The model consists of the following five learned components:
+\begin{align}
+\text{Representation:}  \quad &z_t = h_\theta(s_t) \\
+\text{Latent dynamics:}  \quad &z_{t+1} = d_\theta(z_t, a_t) \\
+\text{Reward:}  \quad &r_t = R_\theta(z_t, a_t) \\
+\text{Value:}  \quad &\hat{q}_t = Q_\theta(z_t, a_t) \\
+\text{Policy:} \quad &\hat{a}_t \sim \pi_\theta(z_t)
+\end{align}
+
+The components of the model are trained using transitions from a replay buffer.  
+A given observation is encoded into a latent state $z_t$.  
+The model unrolls the dynamics, and for each latent state the reward and value are predicted. For each unrolling step, a single-step loss is calculated, which is backpropagated through time up to the first encoding step.  
+The policy is trained separately to minimize a weighted sum of Q-values.
+
+\subsection{Loss functions}
+All parts of the model other than the policy are trained jointly. The model is trained to minimize a temporally weigthed objective on a trajectory of fixed horizon length, sampled from a replay buffer. For each step along the trajectory, a single-step loss is computed and weighted by a discounting factor. The full objective is the following:
+   \begin{equation}
+    \mathcal{J} =   \sum_{i=t}^{t+H} \lambda^{i-t} \mathcal{L(\theta,\Gamma_i)}
+    \end{equation}
+Where $\Gamma \sim \mathcal{B}$ is a trajectory $(s_t,a_t,r_t,s_{t+1})_{t:t+H}$, $\Gamma_i$ is the transition at step $i$ , and $\lambda \in \mathbb{R}_+$ is a constant discount factor that prioritizes near-term predictions.
+The single-step loss consists of three components:
+\begin{itemize}
+    \item{\textbf{Latent State Consistency:}  
+    The dynamics model is trained to match the encoding of the next observation using:
+    \begin{equation}
+    \mathcal{L}_{\text{latent}} = \left\| d_\theta(z_i, a_i) - h_{\theta^-}(s_{i+1}) \right\|
+    \end{equation}
+    where the parameters of the encoder are frozen for this operation.}
+
+    \item{\textbf{Reward Loss:}  
+    The reward module is trained to match the observed rewards for a given state-action pair:
+    \begin{equation}
+    \mathcal{L}_{\text{reward}} = \left\| R_\theta(z_i, a_i) - r_i \right\|
+    \end{equation}}
+    
+    \item{\textbf{Value Loss:}
+    The Q-function is updated using the TD target:
+    \begin{equation}
+    y = R(s,a) + \gamma \max_{a'} Q_{\theta^-}(s', a')
+    \end{equation}
+    where $Q_{\theta^-}$ is a target network with parameters $\theta^-$ that are a moving average of the online parameters $\theta$.  
+    The resulting value loss is:
+    \begin{equation}
+    \mathcal{L}_{\text{value}} = \left\| Q_\theta(z_i, a_i) - \left( r_i + \gamma Q_{\theta^-}(z_{i+1}, \pi_\theta(z_{i+1})) \right) \right\|
+    \end{equation}}
+\end{itemize}
+
+These losses are weighted with constants $c_1:c_3$ to form the single-step loss, which is calculated at each unrolling step.  
+The overall loss is then backpropagated through time to update all model parameters.
+\vspace{1em}
+
+Only the first observation is encoded using the ``active'' encoder $h_\theta$, and the gradients of the three terms in all steps are backpropagated through time to update its parameters. In this way, the latent state space is trained to be task-oriented and predictive of reward and value, rather than being learned via a reconstruction objective that forces the network to model irrelevant details.
+
+\subsection{Policy Training}
+
+The model's policy is trained to produce actions that maximize the learned Q-function, achieved by minimizing:
+\begin{equation}
+J_\pi(\theta; \Gamma) = - \sum_{i=t}^{t+H} \lambda^{i-t} \, Q_\theta \big( z_i, \pi_\theta(sg(z_i)) \big)
+\end{equation}
+which sums Q-values over a rollout, weighted by a decay factor $\lambda$. This is similar to performing gradient ascent directly on the Q-function, but adapted to match the rollout scheme used in MPPI.
+\vspace{1em}
+
+The learned policy is necessary to efficiently compute the value loss, which requires estimating $max_{a_t}Q_{\theta-}(a_t,z_t)$. In addition, the actor is integrated into the planning procedure: in each MPPI iteration, multiple trajectories are sampled from the policy and included in the set of candidate trajectories to be evaluated.
+
+\subsection{Replay Buffer}
+The model is trained in an offline manner using a Replay Buffer. We store each episode in the replay buffer and then sample trajectories from it to perform updates to the model.  
+\section{Cross Entropy Method}
+
+\subsection{Motivation}
+The Cross Entropy Method was originally developed as an efficient technique for estimating probabilities of rare events. Later it was found that optimization problems can be framed as rare event simulation problems and thus the CEM was adapted to solve them as well. We will motivate the main idea behind the method and the derivation of its update rule.
+\subsubsection{Rare event simulation}
+Let $\mathbf{X} = (X_1,...,X_n)$ be a random vector that follows a probability density function $f(\cdot;\mathbf{u})$ parameterized by $\mathbf{u}$. Suppose we want to estimate the probability that the real-valued function $S$ evaluated on a point $\mathbf{X}$ is greater than or equal to some real number $\gamma$. This probability can be expressed as
+\begin{equation}
+\ell = \mathbb{P}_{\mathbf{u}}(S(\mathbf{X}) \geq \gamma) = \mathbb{E}_{\mathbf{u}}I_{[{S(\mathbf{X}) \geq \gamma}]}
+\end{equation}
+where the indicator $I_P$ is 1 if P is true and 0 otherwise.
+If this probability is very small the event is considered rare.
+A standard way to estimate it is to use a simple monte carlo approximation:
+\begin{equation}
+\hat{\ell} = \frac{1}{N} \sum_{i=1}^{N} I_{{S(\mathbf{X}i) \geq \gamma}}, \quad \mathbf{X}i \sim f(\cdot;\mathbf{u}).
+\end{equation}
+While unbiased, this estimator is highly inefficient for rare events. When sampling from the original distribution, samples that satisfy the threshold are very unlikely and thus a large amount of samples are needed to get an accurate estimate.
+
+A common technique to reduce the variance of the estimator is importance sampling. The idea is to sample from a different distribution $g$ where the rare event is more likely to occur, and then correct for this change of distribution by multiplying by the likelihood ratio $W(\mathbf{x}) = f(\mathbf{x};\mathbf{u})/g(\mathbf{x})$ where f is the original distribution and g is the distribution used for sampling. The estimator is the following:
+\begin{equation}
+\hat{\ell}_{\text{IS}} = \frac{1}{N} \sum_{i=1}^{N} I_{{S(\mathbf{X}i) \geq \gamma}} W(\mathbf{X}i), \quad \mathbf{X}i \sim g(\cdot)
+\end{equation}
+The central problem now becomes the selection of an effective $g$. We can see that the optimal choice for g is:
+\begin{equation}
+g^*(\mathbf{x}) = \frac{I_{{S(\mathbf{x}) \geq \gamma}} *f(\mathbf{x};\mathbf{u})}{\ell}.
+\end{equation} 
+where, all of the probability mass of states which are below the threshold is discarded and dividing by $\ell$ normalizes the distribution.
+However, calculating this requires knowledge of the parameter we are trying to estimate. If we had access to this function we could use the estimator:
+\begin{equation}
+\hat{\ell} = \frac{1}{N} \sum_{i=1}^{N} I_{{S(\mathbf{X}_i) \geq \gamma}} W(\mathbf{X}i) = \frac{1}{N} \sum_{i=1}^{N} \ell = \ell,
+\end{equation}
+which is a zero variance estimator.
+
+The solution to this problem is to approximate the optimal $g^*$ with a simpler distribution $f$ from a parameterized family. This is achieved by minimizing the Kullback-Leibler (KL) divergence—also known as the cross-entropy—between $g^*$ and $f$, which measures the closeness of the two distributions. The closer the parameterized distribution $f$ is to $g^*$, the lower the variance of the importance sampling estimator will be.
+The KL divergence is:
+\begin{equation}
+\mathcal{D}_{KL}(g^*,f) = \mathbb{E}_{g^*}\ln \frac{g^*(\mathbf{X})}{f(\mathbf{X})}=\int g^*(\mathbf{x})\ln g^*(\mathbf{x})dx- \int g^*(\mathbf{x})\ln f(\mathbf{x})d\mathbf{x}
+\end{equation}
+where the first term is the entropy of $g^*$ and is a constant. We only need to minimize the second term and therefore, minimizing the KL is  equivalent to solving the maximization problem:
+\begin{equation}
+\max_\mathbf{u} \int g^*(\mathbf{x})\ln f(\mathbf{x};\mathbf{u})d\mathbf{x} 
+\end{equation}
+Substituting $g^*$ from (17) we get:
+\begin{equation}
+\max_\mathbf{u}\mathbb{E}_\mathbf{u}I_{{S(\mathbf{X}_i) \geq \gamma}}\ln f(\mathbf{X};\mathbf{u})
+\end{equation}
+Here we see that the parameter vector $\mathbf{u}$ that best approximates $g^*$ is the one that maximizes the expected log-likelihood of the rare events under the original distribution. A key insight is that the indicator function $I_{S(X_i)\geq \gamma}$ ensures only elite samples —samples with values above the threshold— contribute to the expectation. Thus, subsequent update rules depend solely on these elite samples. This equation is also useful since for distributions belonging to the natural exponential family, it has a closed-form solution.
+
+While this is an expectation we can estimate by sampling we run into a familiar problem: the expectation involves the rare events $S(\mathbf{X}_i)\geq  \gamma$ .  The CEM method solves this by finding an optimal sequence of parameters $\mathbf{u}_t$  corresponding to a sequence of  increasing levels   $\gamma_t$ iteratively. Starting from an initial parameter $\mathbf{u}_0$   and a threshold lower than the target, at each step we find the solution to (22) using importance sampling. Our current best guess $\mathbf{w}$ (the solution of the previous step) is used as the parameter for the sampling distribution. In this way, we first solve for less rare events where $\gamma$ is smaller and sample from a distribution that is iteratively improved.
+The new problem at each iteration, considering importance sampling is,:
+\begin{equation}
+\mathbf{u_t}^* = \underset{\mathbf{u_t}}{\operatorname{argmax}} \mathbb{E}_{\mathbf{w}}\left[ I_{{S(\mathbf{X}) \geq \gamma}} W(\mathbf{X}; \mathbf{u_t}, \mathbf{w}) \ln f(\mathbf{X}; \mathbf{u}) \right]. \quad 
+\end{equation}
+where W is the likelihood ratio and the current best guess $\mathbf{w}$ is set to be $\mathbf{u}_{t-1}$.
+In the algorithm the new threshold level $\gamma_t$ at each step is determined by the elite samples, where we always have a fixed number k of them. When using the gaussian family of distributions the following update rule can be derived, which solves (23):
+
+\begin{equation}
+\mu^{j}_{t+1} = \frac{\sum_{i=1}^{k} \omega_i X^j_i}{\sum_{i=1}^{k} \omega_i}, \quad 
+(\sigma^{j}_{t+1})^2 = \frac{\sum_{i=1}^{k} \omega_i (X^j_i - \mu^{j}_{t+1})^2}{\sum_{i=1}^{k} \omega_i}
+\end{equation}
+where:
+\begin{itemize}
+    \item $X^j_i$ is the $j$-th component of the $i$-th elite sample $\mathbf{X}_i$,
+    \item $\omega_i = W(\mathbf{X}_i; \mathbf{u_t}, \mathbf{w})$ is the likelihood ratio weight for the elite sample.
+\end{itemize}
+We can see that we update to the weighted  mean and variance of the elite set. 
+\subsubsection{Optimization}
+In the rare event simulation scenario, the CE method iteratively improves a distribution that progressively concentrates its mass in regions that produce samples with $S(\mathbf{X}_i)\geq \gamma$. This mechanism can be directly  adapted to solve optimization problems. 
+
+Suppose we have our objective function $S(\mathbf{x})$ and we want to find:
+\begin{equation}
+\mathbf{x}^*= \arg \max_\mathbf{x} S(\mathbf{x}), \quad \gamma^* = S(\mathbf{x}^*)
+\end{equation}
+We define 
+\begin{equation}
+\ell(\gamma)= \mathbb{P}_{\mathbf{u}}(S(\mathbf{x}) \geq \gamma) 
+\end{equation}
+that is now a function of $\gamma$. As $\gamma$ increases, this probability decreases as fewer and fewer points meet or exceed the threshold.
+
+The optimization problem is now framed as a rare-event estimation problem of estimating $\ell(\gamma^*)$, only now $\gamma^*$ is unknown. The CE method inherently handles this by progressively increasing the threshold $\gamma$. Applying it here will produce a sequence of distributions over $\mathbf{x}$ that become increasingly concentrated around the peaks of $S(\mathbf{x})$, thereby producing solutions to the optimization problem.
+
+There is also another subtle, yet crucial difference in the optimization case. In the rare-event simulation scenario , the random vector $\mathbf{x}$ inherently follows a pre-defined distribution $f(\cdot;\mathbf{u})$ under which we want to calculate the rare event probability $\mathbb{P}_{\mathbf{u}}(S(\mathbf{x}) \geq \gamma)$. In contrast, for optimization, the choice of initial $\mathbf{u}$ is entirely arbitrary. The entire distribution is a tool for searching the space. 
+
+This allows us to change the iterative process. At each step  instead of finding the optimal parameters $\mathbf{u}_t$ corresponding to $\mathbb{P}_{\mathbf{u}}(S(\mathbf{x}) \geq \gamma)$, we can update to the optimal parameters corresponding to  $\mathbb{P}_{\mathbf{u}_t}(S(\mathbf{x}) \geq \gamma)$, that is the probability of the rare event under the distribution from which we sample. In this way, we can omit the likelihood ratio weights $(W=1)$. For the Gaussian case, this means simply we simply update to the elite sample mean and variance:
+\begin{equation}
+\mu_{new} = \frac{1}{K}\sum_{i=1}^{k} X^j_i, \quad 
+\sigma^2_{new} = \frac{1}{K}\sum_{i=1}^{k} (X_i - \mu_{new})^2
+\end{equation}
+This is the standard approach to the CE method for optimization
+
+\section{Our work}
+We propose modifying TDMPC by using the Differentiable Cross Entropy method on a learned latent action space parameterized by the latent state space. Simillar to Amos we learn a parameterized decoder that maps pairs of latent states and actions to ground truth action sequences. This way we hope to improve the CEM sample efficiency and achieve simillar performance with fewer samples. We also aim to incorporate the state inside the DCEM making it a combination of a policy and an optimizing procedure and we try to train the induced policy $\pi_{dCEM}$ using various policy gradient methods. 
+
+\subsection{Latent action space DCEM}
+Our goal is to maximize the Expected Return
+\begin{equation}
+J(\pi) = \int_{\tau} P(\tau|\pi) R(\tau) = \mathbb{E}_{\tau \sim \pi} \big[ R(\tau) \big].
+\end{equation}
+Where our return is the finite-horizon discounted return:
+\begin{equation}
+R(\tau) = \sum_{t=0}^{T-1} \gamma^{t} r_{t}.
+\end{equation}
+
+In TDMPC our policy $\Pi_\phi^{CEM}$ is the CE-Method using parameters $\phi$  of the TOLD model, that at each step solves the optimization problem:
+\begin{equation}\label{CEMopt}
+\mathbf{\hat{a}_{1:H}}=  \argmax_{\mathbf{a_{1:H}\in \mathcal{A^H}}} G_\phi(\mathbf{a_{1:H},x_{init}}),
+\
+\end{equation}
+where $G$ is an estimate of the expected return  starting from $\mathbf{x_0}$ and taking the sequence of actions $\mathbf{a_{1:H}}$, made by the TOLD model. Specifically $G_\phi$ is calculated as:
+\begin{equation}\label{CEM_cost_G}
+\begin{aligned}
+G_\phi(\mathbf{a_{0:H},x_{init}})= 
+    G_\phi(\mathbf{a_{0:H},z_0})= &\gamma^HQ_\phi(\mathbf{z_H,a_H})+\sum_{t=0}^{H-1}\gamma^tR_\phi (\mathbf{z_t,a_t}), \\ \text{where: }&\mathbf{z_0}=f^{enc}_\phi(\mathbf{x_{init}}), \\ &\mathbf{z_{t+1}}=f^{d}_\phi(\mathbf{z_t})
+\end{aligned}
+\end{equation}
+where starting from initial state $\mathbf{z_0}$ governed by the dynamics $f^d$ we wish to find the optimal sequence of actions $\mathbf{\hat{a}_{1:H}}$ such that the corresponding trajectory maximizes the expected return $G$. 
+
+We introduce a decoder $f_\theta^{dec}: \mathcal{U}*\mathcal{Z}\xrightarrow{}\mathcal{A}^H$ where $\mathcal{U}$ is the learned latent action space, $\mathcal{Z}$ is the latent state space of TDMPC and $A$ is the ground truth action space. Our goal is to learn a latent action space U in which for a given state is easier to optimize in. 
+Taking the decoder into account, the objective becomes:
+\begin{equation}\label{DCEM_opt}
+\mathbf{\hat{u}} = 
+\argmax_{\mathbf{u}\in\mathcal{U}}G_\phi(\mathbf{u,z_0)}=\argmax_{\mathbf{u}\in\mathcal{U}}G_\phi(f_\theta^{dec}(\mathbf{u,z_0),z_0)}
+\end{equation}
+Here, the CEM searches in the decoder’s input space to find the optimal $\mathbf{\hat{u}}$ that, together with ${\mathbf{z_0}}$, maximizes the expected return $G$. Our goal is to train the decoder’s parameters $\theta$ such that (\ref{DCEM_opt}) becomes easier to solve using the Cross Entropy Method (CEM) than (\ref{CEMopt}). This idea was first introduced by Amos et al. as an application of the Differentiable Cross Entropy Method. Using this differentiable variant allows us to train the action space jointly with the CEM by unrolling the optimization procedure. Consequently, the decoder can be optimized to produce better samples for the method.
+
+The motivation for introducing such a latent space is that it enables the model to learn the structure of the action space for a specific task. This is particularly important in reinforcement learning, where tasks are often repetitive. While the CEM in its standard form already produces strong results, it employs a diagonal Gaussian distribution, thereby ignoring correlations across action dimensions and between different actions over time. The latent action space offers a way to introduce such correlations into the CEM without increasing its computational complexity.
+
+The decoder architecture further allows us to incorporate state information into the action selection step of the CEM. In our approach, the latent action space thus becomes state-dependent. This bridges the advantages of amortizing the optimization problem—such as having a standard policy—with those of directly solving it using the Cross Entropy Method. This idea aligns with the approach taken by the authors of TDMPC, who incorporate actions produced by the policy into the action selection step of the CEM. However, we take this one step further by directly optimizing the decoder to learn the relationship between the current state and the generation of effective actions within the CEM framework.
+
+
+
+\subsubsection{DCEM with the decoder is a parameterized stochastic policy}
+There are several ways to interpret the entire DCEM procedure with the incorporated latent action space. One particularly useful perspective is to view it as a stochastic policy, which allows us to introduce reinforcement learning concepts in a more formal and principled manner.
+
+The DCEM begins with a diagonal Gaussian distribution $q_{\mu,\sigma^2}$, initialized with parameters $\mu = 0$ and $\sigma^2 = 2$, and iteratively refines it into an optimal distribution $q_{\hat{\mu},\hat{\sigma}}$, where $\hat{\mu}$ and $\hat{\sigma}$ denote the optimized parameters. We can thus regard the entire DCEM process as a stochastic, parameterized policy that selects latent actions by sampling from the probability distribution $q_{\hat{\mu},\hat{\sigma}}$ and decoding them using $f^{\text{dec}}_\theta$.
+
+We first define the policy in the latent action space as $\pi'_{\theta,\phi}(\cdot|\mathbf{z_t},\epsilon)=q_{{\hat\mu,\hat\sigma}}$ where $\epsilon$ represents the random seed that generates the sampling noise in DCEM. The corresponding policy in the ground-truth action space is then defined by the distribution produced at the output of the decoder, which is:
+
+\begin{equation}
+\pi_{\theta,\phi}(\mbf{a_t|z_t,\epsilon})= \int \pi'_{\theta,\phi}(\mbf{u}|\mbf{z_t},\epsilon)*\delta(\mbf{a_t}-f^{dec}_\theta(\mbf{u_t})_0)\mbf{du}
+\end{equation}
+, where $(\mbf{x})_0$ selects the first element of $\mbf{x}$.
+This integrates over all of $\mathcal{U}$ and sums the probabilities of latent action that correspond to the ground truth action $\mbf{a_t}$. The integral is of course intractable.
+
+
+
+\subsection{Training the Decoder}
+
+\subsubsection{Off policy decoder training}
+Our first approach is to train the decoders parameters in an off policy manner. We can train the the decoder so that the final action sequence produced by the DCEM yields a high reward in the CEM objective $G_\phi(\mbf{a_{0:H},z_0)}$ in (\ref{CEM_cost_G}):
+
+Specifically we optimize the whole procedure $\pi_{DCEM}=\pi_{\theta,\phi}(\mathbf{a_{1:H}}|\mathbf{z},\epsilon)$ so that the final action sequence $\mathbf{\hat{a}_{1:H}} = \mu(\pi_{\theta,\phi}(\mathbf{a_{1:H}|}\mathbf{z},\epsilon))$, where $\mu()$ is the mean, maximizes the CEM objective:
+\begin{equation}\label{CEMopt}
+\mathbf{\hat{a}_{1:H}}=  \argmax_{\mathbf{a_{1:H}\in \mathcal{A^H}}} G_\phi(\mathbf{a_{1:H},z})
+\end{equation}
+Thus the decoders parameters are optimized according to:
+\begin{equation}
+\max_\theta \mathbb{E}_{\substack{z \sim \mathcal{D} \\ \epsilon \sim \mathcal{N}}} [G_\phi(\mathbf{\mu(\pi_{\theta,\phi}(\mathbf{a_{1:H}|}\mathbf{z},\epsilon)),z)}]
+\end{equation}
+ where the expectation is over latent states sampled from the replay buffer, and the gaussian noise $\epsilon$ used in the DCEM.
+
+This objective is essentially a DDPG-style objective.
+Here, the policy learns only to find good solutions to the temporal difference (TD) objective and therefore learns exclusively through the reward model and Q-function, rather than directly from interactions with the environment. Consequently, the extent to which we can effectively train the decoder depends on the accuracy of the TOLD model. Moreover, even with a well-trained model, overtraining the decoder can lead it to exploit weaknesses in the model—for instance, discovering actions that the model predicts as beneficial but that are actually suboptimal in the real environment. Such behavior can cause performance degradation or collapse.
+
+The major advantage of this method is that it is entirely off-policy. This allows us to incorporate the decoder and train it exclusively on past experience to improve TDMPC performance, without the need to collect large amounts of new data—or any additional data at all. Moreover, applying this approach within the TDMPC framework is particularly straightforward, as the model itself is already trained in an off-policy manner.
+
+To implement this, we backpropagate through the entire DCEM procedure. Using samples of previously visited latent states from the replay buffer, we unroll DCEM to compute the final distribution over latent actions. We then select its mean and decode it into the corresponding optimal action sequence $\mathbf{\hat{a}_{0:H}}$. The associated cost $G_\phi(\mathbf{\hat{a}_{1:H}}, \mathbf{z})$ is then computed, and gradients are backpropagated through all sampling stages of the DCEM. During the decoder updates, all TOLD parameters are kept frozen, as they are used in the computation of $G$ for each sample.
+
+For DCEM, we rely solely on samples generated by the procedure itself and do not augment them with samples from the TDMPC deterministic policy. The mean of the final distribution, $\mu(\pi'_{\theta,\phi}(\mathbf{u} \mid \mathbf{z}, \epsilon))$, is used when updating the decoder or evaluating the model. When the agent collects new data, we instead sample from the latent-space distribution $\pi'_{\theta,\phi}(\mathbf{u} \mid \mathbf{z}, \epsilon)$ to promote exploration.
+
+DCEM UPDATE AND PLANNING CODE HERE
+
+The rest of the model is updated in the same manner as in the standard setup. The policy is still required, as it is used to compute the target $\max_{\mathbf{a_t}} Q_\theta(\mathbf{z}, \mathbf{a_t})$, which would be computationally expensive to evaluate using the full DCEM procedure. Nevertheless, it may be worth investigating whether it is possible and beneficial to use the decoder without noise input—or DCEM with only a single iteration—for this purpose. Doing so could potentially yield a $Q$-function that more closely resembles the DCEM policy that is actually deployed.
+
+To mitigate objective mismatch between the DCEM policy and the $Q$-function, we typically initialize the decoder such that $\Pi^{DCEM} \approx \Pi^{CEM}$. This ensures that when DCEM is introduced, the $Q$-function remains consistent with it. Further details on this initialization procedure and the decoder architecture are provided in the Implementation Details section.
+
+\subsubsection{On policy decoder training}
+We start with the general case of any stochastic, parameterized policy $\pi_\theta$ such as our DCEM policy. To simplify notation we consider $s_i$ to be a general state vector, $a_i$ to be a ground truth action and $u_i$ to be a latent space action. The decoder from the latent to the ground truth action space is $f^{dec}_\theta$ and the corresponding decoded action applied to the environment for a latent $u_i$ is $a_i=f^{dec}_\theta(u_i)_0$ 
+
+We aim to maximize the expected return:
+\begin{equation}
+J(\pi_\theta) = \mathbb{E}_{\tau \sim \pi_\theta} \big[ R(\tau) \big]=\int_{\tau} P(\tau|\pi_\theta) R(\tau)
+\end{equation}
+Where our return is the finite-horizon discounted return:
+\begin{equation}
+R(\tau) = \sum_{t=0}^{T-1} \gamma^{t} r_{t}.
+\end{equation}
+The probability of a tajectory $\tau  = (s_0,a_0,\dots,s_{T+1})$ given that the environment follows dynamics $P(s_{t+1}|s_t,a_t)$ and actions follow $\pi_\theta$  is
+\begin{equation}
+P(\tau|\theta) = p(s_0)\prod_{t=0}^TP(s_{t+1}|s_t,a_t)\pi_\theta(a_t,s_t)
+\end{equation}
+Substituting this into the integral expression of $J$ and following the standard policy gradient derivation we can find the following expression for the gradient:
+\begin{equation}
+\nabla_\theta J(\pi_\theta) = \mathbb{E}_{\tau \sim\pi_\theta}[\sum_{t=0}^T\nabla_\theta \log \pi_\theta(a_t|s_t) R(\tau)]
+\end{equation}
+This, however, is not useful for us as it requires calculating $\log\pi_\theta(a_t|s_t)$ which is the policy in the ground truth space. We would like to derive an expression consisting of $\pi'_{\theta}(u_t|s_t)$.
+
+We can instead start by defining trajectories: $\tau_{u} = (s_0,u_0,\dots,s_{T+1})$ consisting of the state and latent action at each step. 
+We want to maximize the expected return following the latent policy $\pi'_\theta$:
+\begin{equation}
+J(\pi_\theta) = \mathbb{E_{\tau_u \sim \pi'_\theta} }[R(\tau_u)]
+\end{equation}
+Where the probability of a trajectory $\tau_u$ is 
+\begin{equation}
+\begin{aligned}
+P(\tau|\theta) &= p(s_0)\prod_{t=0}^TP(s_{t+1}|s_t,a_t)\pi_\theta(a_t,s_t), \text{where }a_t= f^\theta_{dec}(u_t)_0 \\&= p(s_0)\prod_{t=0}^TP(s_{t+1}|s_t,a_t) \pi'_{\theta}(u|z_t)*\delta(a_t-f^{dec}_\theta(u_t)_0) \\&= p(s_0) \prod_{t=0}^TP(s_{t+1}|s_t,f_{dec}^\theta(u_t)_0)\pi'_\theta (u|z_t)
+\end{aligned}
+\end{equation}
+Now we can derive:
+\begin{align}
+\nabla_\theta J(\pi_\theta) &= \nabla_\theta \mathbb{E}_{\tau\sim\pi_\theta}[R(\tau_u)]
+\\ &= \nabla_\theta\int_{\tau_u}P(\tau_u|\theta)R(\tau_u)
+\\ &=\int_{\tau_u}\nabla_\theta( P(\tau_u|\theta)R(\tau_u))
+\\ &=\int_{\tau_u}\nabla_\theta P(\tau_u|\theta)R(\tau_u)+\int_{\tau_u}(P(\tau_u|\theta)\nabla_\theta R(\tau_u)
+\\\label{log_trick}&=\int_{\tau_u}P(\tau_u|\theta)\nabla_\theta \log P(\tau_u|\theta)R(\tau_u)+\int_{\tau_u}(P(\tau_u|\theta)\nabla_\theta R(\tau_u)
+\\&= \mathbb{E}_{\tau_u\sim\pi_\theta}[\nabla_\theta \log P(\tau_u|\theta)R(\tau_u)] +\mathbb{E}_{\tau_u\sim\pi_\theta}[\nabla_\theta R(\tau_u)]\label{expectation_sum}
+\end{align}
+Where in (\ref{log_trick})  we use the log-derivative trick from calculus which gives:
+\[
+\nabla_{\theta} P(\tau|\theta) = P(\tau|\theta) \nabla_{\theta} \log P(\tau|\theta).
+\]
+Lets focus on the second term. When considering trajectories of the form $\tau =(s_0,a_0,...,s_{T-1})$ we can take this term to be zero because for a given trajectory $\tau$ the return is fixed and does not depend on $\theta$. However, this is not the case in our setting. For a single trajectory $\tau_u = (s_0,u_0,...,s_{T-1})$ we can get many different state action trajectories $\tau$ depending on the decoder parameters $\theta$. Consequently, given a trajectory $\tau_u$ the gradient of the return with respect to $\theta$ is not zero and the term does not cancel out. 
+
+Simillarly for the first term. If we look at the gradient:
+\begin{equation}\label{grad_log_probs}
+\begin{aligned}
+\nabla_\theta\log P(\tau_u|\theta)&=\cancel{\nabla_\theta \log \rho_0(s_0)} 
++ \sum_{t=0}^{T} \left( 
+{\nabla_\theta \log P(s_{t+1} \mid s_t, f^{dec}_\theta(u_t)_0})
++ \nabla_\theta \log \pi'_\theta(u_t \mid s_t) \right)
+\end{aligned}
+\end{equation}
+Again, the gradient of the environment dynamics with respect to the ground truth action given a trajectory $\tau = (s_0,a_0,...,s_{T-1})$ is zero, but this is not our case. Given the latent action $u_t$ the probability distribution over the next state depends on the decoding $a_t =f^{dec}_\theta(u_t)_0$. Substituting (\ref{grad_log_probs}) into (\ref{expectation_sum}) we get:
+\begin{equation}\label{gradJ}
+\nabla_\theta J(\pi_\theta)  = \mathbb{E}_{\tau_u\sim\pi_\theta}[\sum_{t=0}^{T} \left( 
+{\nabla_\theta \log P(s_{t+1} \mid s_t, f^{dec}_\theta(u_t)_0})
++ \nabla_\theta \log \pi'_\theta(u_t \mid s_t) \right)R(\tau_u)] +\mathbb{E}_{\tau_u\sim\pi_\theta}[\nabla_\theta R(\tau_u)]
+\end{equation}
+This expression corresponds to the general case, where gradients can only be computed if a learned model of the environment is available. For TDMPC, this is possible for the second term: since we have a learned reward model, the gradient can be written as:
+\begin{equation}
+\nabla_\theta R(\tau_u) = \sum_{t=0}^T\gamma^t  \nabla_\theta r(s_t,a_t)=  \sum_{t=0}^T(\gamma^t \nabla_a R*\nabla_\theta f^{dec}_\theta(u_t)_0)
+\end{equation}
+he first term can be simplified due to TDMPC’s assumption of a deterministic dynamics model. For a trajectory $\tau_u=(s_0,u_0,..,s_{T-1})$ that is consistent with deterministic dynamics $s_{t+1}=f^{dyn}(s_t,a_t)$ where $a_t =f^{dec}_\theta(u_t)_0$ the probability $P(\tau_u|\theta)$ becomes: 
+\begin{equation}
+P(\tau_u|\theta)=P(s_0)\prod_{t=0}^T\pi'_\theta(u_t,s_t)
+\end{equation}
+and equation (\ref{gradJ}) becomes:
+\begin{equation}\label{gradJ}
+\nabla_\theta J(\pi_\theta)  = \mathbb{E}_{\tau_u\sim\pi_\theta}[\sum_{t=0}^{T} \nabla_\theta \log \pi'_\theta(u_t \mid s_t) R(\tau_u)] +\mathbb{E}_{\tau_u\sim\pi_\theta}[\nabla_\theta R(\tau_u)]
+\end{equation}
+
+
+
+\end{document}
