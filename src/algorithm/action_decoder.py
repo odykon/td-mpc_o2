@@ -317,3 +317,26 @@ def PG_withV(self, obs, u_mean, u_std, reward, next_obses, original_log_probs, o
     self.action_dec_optim.step()
 
     return dec_loss.item(), V_loss.item()
+
+def decoder_Q_objective(self, obs, next_obses, u_mean, horizon):
+    self.action_dec_optim.zero_grad()
+    # obs_seq: [6, batch_size, obs_dim]
+    obs_seq = next_obses[:horizon,:,:]
+    obs_sequence = torch.cat([obs.unsqueeze(0), next_obses[:(horizon-1)]], dim=0)
+    print(obs_seq.shape)
+    B = obs_seq.shape[1]
+    T = obs_seq.shape[0]
+    obs_seq_flat = obs_seq.reshape(T * B, -1)  # [6 * batch_size, obs_dim]
+    z_flat = agent.model.h(obs_seq_flat)        # [6 * batch_size, latent_dim]
+    z_seq = z_flat.reshape(T, B, -1)
+    z0 = agent.model.h(obs)
+    dec_input = torch.cat([u_mean, z0], dim=1)
+    sequence = agent.model.decode_sequence(dec_input)
+    dec_loss= 0
+    for t, z in enumerate(z_seq):
+        a = sequence[t,:,:]
+        Q = torch.min(*agent.model.Q(z,a))
+        dec_loss += -Q.mean() * (agent.cfg.rho ** t)
+    dec_loss.backward()
+    self.action_dec_optim.step()
+    return dec_loss.item()
