@@ -110,8 +110,8 @@ def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None
         "mean_reward": mean_reward,
         "std_reward": std_reward,
     }
-    for i, r in enumerate(episode_rewards, start=1):
-        eval_metrics[f"ep{i}_reward"] = float(r)
+    #for i, r in enumerate(episode_rewards, start=1):
+    #    eval_metrics[f"ep{i}_reward"] = float(r)
 
     print(f"\nEvaluation Summary — Step {step}")
     print("-" * 25)
@@ -138,8 +138,8 @@ def save_results(cfg, episode_metrics, save_dir, evaluation_metrics=None, step=N
     else:
         # If no evaluation, ensure eval_* keys exist (filled with NaN)
         all_metrics.update({
-            "eval_reward": np.nan,
-            "eval_success_rate": np.nan
+            "mean_reward": np.nan,
+            "std_reward": np.nan
         })
 
     # Add step and timestamp
