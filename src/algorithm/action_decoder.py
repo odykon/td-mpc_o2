@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-def build_action_decoder(cfg, initialize_fn=None, use_latent_state=True):
+def build_action_decoder(cfg, initialize=False, use_latent_state=True):
     """
     Builds and (optionally) initializes the action decoder network.
 
@@ -24,8 +24,8 @@ def build_action_decoder(cfg, initialize_fn=None, use_latent_state=True):
         nn.Linear(256, cfg.horizon * cfg.action_dim),
         nn.Tanh()
     )
-    if initialize_fn is not None:
-        action_decoder = initialize_fn(
+    if initialize:
+        action_decoder = initialize_per_horizon_identity(
             action_decoder,
             cfg.latent_action_dim,
             cfg.latent_dim if use_latent_state else 0,
