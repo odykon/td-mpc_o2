@@ -110,15 +110,15 @@ def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None
         "mean_reward": mean_reward,
         "std_reward": std_reward,
     }
-    #for i, r in enumerate(episode_rewards, start=1):
-    #    eval_metrics[f"ep{i}_reward"] = float(r)
+    for i, r in enumerate(episode_rewards, start=1):
+        eval_metrics[f"ep{i}_reward"] = float(r)
 
     print(f"\nEvaluation Summary — Step {step}")
     print("-" * 25)
     print(f"Mean Reward: {mean_reward:.3f}")
     print(f"Std Reward:  {std_reward:.3f}")
 
-    return eval_metrics
+    return mean_metrics
 
 def save_results(cfg, episode_metrics, save_dir, evaluation_metrics=None, step=None):
     os.makedirs(save_dir, exist_ok=True)
