@@ -211,7 +211,7 @@ class TDMPC():
                 scores_exp = scores.unsqueeze(2)  # [B, N, 1]
 
                 u_m = torch.sum(scores_exp * u_samples, dim=1)  # [B, latent_action_dim]
-                u_s = torch.sqrt(torch.sum(scores_exp * (u_samples - u_m.unsqueeze(1)) ** 2, dim=1))# / (scores.sum(dim=1, keepdim=True) + 1e-9)
+                u_s = torch.sqrt(torch.sum(scores_exp * (u_samples - u_m.unsqueeze(1)) ** 2, dim=1)) / (scores.sum(dim=1, keepdim=True) + 1e-9)
 
                 u_s = u_s.clamp(self.std, 2)
                 u_mean = self.cfg.momentum * u_mean + (1 - self.cfg.momentum) * u_m
