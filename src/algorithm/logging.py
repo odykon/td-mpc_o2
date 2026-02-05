@@ -62,7 +62,7 @@ def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None
                 if cem: 
                     action = agent.plan(obs, eval_mode =True, step=step_in_ep, t0=(step_in_ep == 0))
                 else:    
-                    action, _, _, _, _ = agent.DCEMethod(obs, step=step_in_ep, t0=(step_in_ep == 0))
+                    action, _, _, _, _ = agent.CEM_in_latent(obs, step=step_in_ep, t0=(step_in_ep == 0))
             obs, reward, done, _ = env.step(action.cpu().numpy())
             total_reward += reward
             step_in_ep += 1
