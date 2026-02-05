@@ -229,7 +229,57 @@ class TDMPC():
             sequence = self.model.decode_sequence(latent_action, z_0)
             action = sequence[0, :].squeeze_(0)
         return action,  u_mean, u_std, latent_action, log_probs
-
+        
+    def CEM_on_latent(self, obs, update_mode=False, step=None, t0=True, seed = None, sample_final_action= False, lml_temperature=10):
+        if(not update_mode): obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        B = obs.shape[0]
+        horizon = int(min(self.cfg.horizon, h.linear_schedule(self.cfg.horizon_schedule, step)))
+    
+        with torch.no_grad():
+            # Initialize state and parameters
+            z = self.model.h(obs)  # shape: [B, latent_dim]
+            z = z.unsqueeze(1).repeat(1, self.cfg.num_samples, 1)  # [B, N, latent_dim]
+            z = z.view(B * self.cfg.num_samples, -1)
+    
+            u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device,
+                                requires_grad=update_mode)
+            u_std = 2 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device, requires_grad = update_mode)
+            for i in range(self.cfg.iterations):
+                u_noise = torch.randn(self.cfg.num_samples, self.cfg.latent_action_dim, device=self.cfg.device)
+                u_samples = u_mean.unsqueeze(0) + u_std.unsqueeze(0) * u_noise  # [B, N, latent_action_dim]
+                #u_samples_flat = u_samples.view(self.cfg.num_samples, self.cfg.latent_action_dim)
+                #print("u_samples_flat:", u_samples_flat.shape)
+    
+                sequence = self.model.decode_sequence(u_samples, z)
+                value = self.estimate_value(z, sequence, horizon).squeeze(1) #[B, num_samples]
+    
+                elite_idxs = torch.topk(value, self.cfg.num_elites, dim=0).indices
+    
+                elite_values = value[elite_idxs]
+                elite_samples = u_samples[elite_idxs]
+    
+                u_m = elite_samples.mean(dim=0)
+                u_s  = elite_samples.std(dim=0, unbiased=False)
+    
+                u_s = u_s.clamp(self.std, 2)
+                u_mean = self.cfg.momentum * u_mean + (1 - self.cfg.momentum) * u_m
+                u_std = u_s
+    
+    
+            z_0 = self.model.h(obs)
+            dist = torch.distributions.Normal(loc=u_mean, scale=u_std)
+            if(sample_final_action):
+                latent_action = dist.rsample()
+            else:
+                latent_action = u_mean
+            latent_action.unsqueeze_(0)
+    
+            log_probs = dist.log_prob(latent_action).squeeze_(0)
+            log_probs = log_probs.sum(dim=0)
+            sequence = self.model.decode_sequence(latent_action, z_0)
+            action = sequence[0, :].squeeze_(0)
+        return action,  u_mean, u_std, latent_action, log_probs
+    
     def update_pi(self, zs):
         """Update policy using a sequence of latent states."""
         self.pi_optim.zero_grad(set_to_none=True)
