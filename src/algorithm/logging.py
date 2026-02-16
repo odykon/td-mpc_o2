@@ -19,7 +19,7 @@ def make_save_dir_path(cfg, base_dir="results", timezone="Europe/Athens"):
     save_dir = os.path.join(base_dir, f"{exp_name}_{timestamp}")
     return save_dir
 
-def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None, video_mode="none"):
+def evaluate_agent(env, agent, cfg, step, cem=False, LML=False, n_episodes=5, save_dir=None, video_mode="none"):
     """
     Evaluate the agent and optionally save videos.
 
@@ -52,27 +52,38 @@ def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None
         done = False
         total_reward = 0.0
         step_in_ep = 0
-
+        total_compute_time =0
+        
         # Decide if this episode should record frames
         record = (video_mode == "first" and ep == 0) or (video_mode == "best_worst")
         frames = [] if record else None
-
+        
+        episode_start = time.time()
         while not done:
             with torch.no_grad():
-                if cem: 
+                if cem:
+                    compute_time_start= time.time()
                     action = agent.plan(obs, eval_mode =True, step=step_in_ep, t0=(step_in_ep == 0))
-                else:    
+                    compute_time_end = time.time()
+                elif LML:
+                    compute_time_start= time.time()
+                    action, _, _, _, _ = agent.DCEMethod(obs, step=step_in_ep, t0=(step_in_ep == 0))
+                    compute_time_end = time.time()
+                else:
+                    compute_time_start= time.time()
                     action, _, _, _, _ = agent.CEM_in_latent(obs, step=step_in_ep, t0=(step_in_ep == 0))
+                    compute_time_end = time.time()
             obs, reward, done, _ = env.step(action.cpu().numpy())
             total_reward += reward
             step_in_ep += 1
-
+            total_compute_time += (compute_time_end-compute_time_start)
             if record:
                 try:
                     frame = env.render(mode='rgb_array', height=480, width=640, camera_id=0)
                 except TypeError:
                     frame = env.render(mode='rgb_array')
                 frames.append(frame)
+        episode_end = time.time()
 
         episode_rewards.append(total_reward)
         if video_mode == "best_worst":
@@ -109,9 +120,11 @@ def evaluate_agent(env, agent, cfg, step, cem=False, n_episodes=5, save_dir=None
         "step": int(step),
         "mean_reward": mean_reward,
         "std_reward": std_reward,
+        "mean_compute_duration": total_compute_time/1000,
+        "episode_duration": episode_end-episode_start,
+        "rewards": [] 
     }
-    for i, r in enumerate(episode_rewards, start=1):
-        eval_metrics[f"ep{i}_reward"] = float(r)
+    eval_metrics["rewards"] = [float(r) for r in episode_rewards]
 
     print(f"\nEvaluation Summary — Step {step}")
     print("-" * 25)
