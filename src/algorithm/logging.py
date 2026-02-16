@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import imageio
 import os
+import time
 
 def make_save_dir_path(cfg, base_dir="results", timezone="Europe/Athens"):
     local_time = datetime.now(ZoneInfo(timezone))
