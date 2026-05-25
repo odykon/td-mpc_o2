@@ -141,7 +141,6 @@ def DCEMethod_v2(self, obs, step=None, t0=True,
         u_std  = 2 * torch.ones(B, self.cfg.latent_action_dim,
                                 device=self.cfg.device, requires_grad=True)
 
-        sequence_iter0 = None
         for i in range(self.cfg.iterations):
             u_noise  = torch.randn(B, self.cfg.latent_num_samples,
                                    self.cfg.latent_action_dim, device=self.cfg.device)
@@ -149,9 +148,6 @@ def DCEMethod_v2(self, obs, step=None, t0=True,
             u_flat    = u_samples.view(B * self.cfg.latent_num_samples, self.cfg.latent_action_dim)
 
             sequence = self.model.decode_sequence(u_flat, z)
-            if i == 0:
-                sequence_iter0 = sequence
-
             value    = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
 
             mu     = value.mean(dim=1, keepdim=True).detach()
@@ -177,9 +173,9 @@ def DCEMethod_v2(self, obs, step=None, t0=True,
             u_mean = u_m
             u_std  = u_s
 
-        # Action diversity from first CEM iteration (fixed prior N(0,2) — pure decoder expressiveness measure)
-        N, H, A  = self.cfg.latent_num_samples, sequence_iter0.shape[0], sequence_iter0.shape[-1]
-        seq      = sequence_iter0.view(H, B, N, A)
+        # Action diversity from last CEM iteration
+        N, H, A  = self.cfg.latent_num_samples, sequence.shape[0], sequence.shape[-1]
+        seq      = sequence.view(H, B, N, A)
         seq_c    = seq - seq.mean(dim=2, keepdim=True)
         cov      = (seq_c.transpose(-1, -2) @ seq_c) / (N - 1)
         cov      = cov + 1e-6 * torch.eye(A, device=seq.device)
