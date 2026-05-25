@@ -80,7 +80,7 @@ PHASED_DEFAULTS = {
     'latent_num_elites':  8,
     'lml_temperature':    1,
     'dcem_sampling_n':    None,
-    'saturation_coeff':   0.05,
+    'saturation_coeff':   0.0,
     'use_is_weights':     True,
     'dec_grad_clip_norm': 20,
 
@@ -189,7 +189,7 @@ def train(cfg):
             elif phase in ('tdmpc', 'warmup'):
                 action = agent.plan(obs, step=step, t0=episode.first)
             else:
-                action, *_ = agent.DCEMethod_planning(
+                action, *_ = agent.CEM_in_latent(
                     obs, step=step, t0=episode.first, sample_final_action=True
                 )
             obs, reward, done, _ = env.step(action.cpu().numpy())
