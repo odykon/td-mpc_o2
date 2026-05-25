@@ -37,10 +37,8 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
     # LayerNorm on first hidden layer (after Linear, before ReLU) — follows Q-function pattern.
     # To revert: remove nn.LayerNorm(256) below.
     action_decoder = nn.Sequential(
+        nn.LayerNorm(input_dim),
         nn.Linear(input_dim, 256),
-        nn.LayerNorm(256),
-        nn.Tanh(),
-        nn.Linear(256, 256),
         nn.ReLU(),
         nn.Linear(256, cfg.horizon * cfg.action_dim),
         nn.Tanh(),
@@ -140,7 +138,7 @@ def decode_sequence(self, u, z):
         actions: [horizon, B, action_dim] decoded action sequence.
     """
     B = u.size(0)
-    in_dim = self._action_decoder[0].in_features
+    in_dim = self._action_decoder[1].in_features
 
     if in_dim == self.cfg.latent_action_dim + self.cfg.latent_dim:
         dec_input = torch.cat([u, z], dim=-1)
@@ -158,7 +156,7 @@ def decode_sequence_pretanh(self, u, z):
         pretanh:   [horizon, B, action_dim]  pre-Tanh
     """
     B = u.size(0)
-    in_dim = self._action_decoder[0].in_features
+    in_dim = self._action_decoder[1].in_features
 
     if in_dim == self.cfg.latent_action_dim + self.cfg.latent_dim:
         dec_input = torch.cat([u, z], dim=-1)
