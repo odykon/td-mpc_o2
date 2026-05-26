@@ -56,11 +56,11 @@ class TDMPC_O2(TDMPC):
         """estimate_value without @torch.no_grad() — needed for gradient flow in DCEMethod."""
         m = self.model_target if target else self.model
         G, discount = 0, 1
-        for t in range(horizon - 1):
+        for t in range(horizon):
             z, reward = m.next(z, actions[t])
             G += discount * reward
             discount *= self.cfg.discount
-        G += discount * torch.min(*m.Q(z, actions[horizon - 1]))
+        G += discount * torch.min(*m.Q(z, m.pi(z, self.cfg.min_std)))
         return G
 
     def DCEMethod(self, *args, **kwargs):
