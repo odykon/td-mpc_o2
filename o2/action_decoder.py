@@ -14,6 +14,20 @@ import torch
 import torch.nn as nn
 import algorithm.helper as h
 
+class SplitNormDecoder(nn.Module):
+    """Applies separate LayerNorm to u and z before concatenating and passing to the decoder net."""
+    def __init__(self, d_u, d_z, net):
+        super().__init__()
+        self.d_u = d_u
+        self.norm_u = nn.LayerNorm(d_u)
+        self.norm_z = nn.LayerNorm(d_z)
+        self.net = net
+
+    def forward(self, x):
+        u, z = x[:, :self.d_u], x[:, self.d_u:]
+        return self.net(torch.cat([self.norm_u(u), self.norm_z(z)], dim=-1))
+
+
 def build_action_decoder(cfg, initialize=False, use_latent_state=True):
     """
     Build the action decoder network.
@@ -138,12 +152,7 @@ def decode_sequence(self, u, z):
         actions: [horizon, B, action_dim] decoded action sequence.
     """
     B = u.size(0)
-    in_dim = self._action_decoder[0].in_features
-
-    if in_dim == self.cfg.latent_action_dim + self.cfg.latent_dim:
-        dec_input = torch.cat([u, z], dim=-1)
-    else:
-        dec_input = u
+    dec_input = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
 
     actions = self._action_decoder(dec_input)
     return actions.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
@@ -156,12 +165,7 @@ def decode_sequence_pretanh(self, u, z):
         pretanh:   [horizon, B, action_dim]  pre-Tanh
     """
     B = u.size(0)
-    in_dim = self._action_decoder[0].in_features
-
-    if in_dim == self.cfg.latent_action_dim + self.cfg.latent_dim:
-        dec_input = torch.cat([u, z], dim=-1)
-    else:
-        dec_input = u
+    dec_input = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
 
     # forward through all layers except final Tanh
     x = dec_input

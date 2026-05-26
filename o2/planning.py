@@ -148,6 +148,23 @@ def DCEMethod_v2(self, obs, step=None, t0=True,
             u_flat    = u_samples.view(B * self.cfg.latent_num_samples, self.cfg.latent_action_dim)
 
             sequence = self.model.decode_sequence(u_flat, z)
+
+            # Action diversity from first CEM iteration
+            if i == 0:
+                N, H, A  = self.cfg.latent_num_samples, sequence.shape[0], sequence.shape[-1]
+                seq      = sequence.view(H, B, N, A)
+                seq_c    = seq - seq.mean(dim=2, keepdim=True)
+                cov      = (seq_c.transpose(-1, -2) @ seq_c) / (N - 1)
+                cov      = cov + 1e-6 * torch.eye(A, device=seq.device)
+                log_det_loss = -torch.linalg.slogdet(cov)[1].mean()
+
+                with torch.no_grad():
+                    action_var     = seq.var(dim=2).mean().item()
+                    eigvals        = torch.linalg.eigvalsh(cov).clamp(min=0)
+                    p              = eigvals / (eigvals.sum(dim=-1, keepdim=True) + 1e-8)
+                    effective_rank = p.mul(-1).mul(torch.log(p + 1e-8)).sum(dim=-1).exp().mean().item()
+                    diversity      = {'action_var': action_var, 'log_det': -log_det_loss.item(), 'effective_rank': effective_rank}
+
             value    = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
 
             mu     = value.mean(dim=1, keepdim=True).detach()
@@ -172,21 +189,6 @@ def DCEMethod_v2(self, obs, step=None, t0=True,
 
             u_mean = u_m
             u_std  = u_s
-
-        # Action diversity from last CEM iteration
-        N, H, A  = self.cfg.latent_num_samples, sequence.shape[0], sequence.shape[-1]
-        seq      = sequence.view(H, B, N, A)
-        seq_c    = seq - seq.mean(dim=2, keepdim=True)
-        cov      = (seq_c.transpose(-1, -2) @ seq_c) / (N - 1)
-        cov      = cov + 1e-6 * torch.eye(A, device=seq.device)
-        log_det_loss = -torch.linalg.slogdet(cov)[1].mean()                       # minimise to maximise log-det
-
-        with torch.no_grad():
-            action_var     = seq.var(dim=2).mean().item()
-            eigvals        = torch.linalg.eigvalsh(cov).clamp(min=0)
-            p              = eigvals / (eigvals.sum(dim=-1, keepdim=True) + 1e-8)
-            effective_rank = p.mul(-1).mul(torch.log(p + 1e-8)).sum(dim=-1).exp().mean().item()
-            diversity      = {'action_var': action_var, 'log_det': -log_det_loss.item(), 'effective_rank': effective_rank}
 
         dist  = torch.distributions.Normal(loc=u_mean, scale=u_std)
         latent_action = dist.rsample() if sample_final_action else u_mean
