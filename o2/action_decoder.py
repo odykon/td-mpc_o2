@@ -38,6 +38,7 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
     # To revert: remove nn.LayerNorm(256) below.
     action_decoder = nn.Sequential(
         nn.Linear(input_dim, 256),
+        nn.LayerNorm(256),
         nn.ReLU(),
         nn.Linear(256, cfg.horizon * cfg.action_dim),
         nn.Tanh(),
