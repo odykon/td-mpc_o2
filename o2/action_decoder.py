@@ -14,19 +14,6 @@ import torch
 import torch.nn as nn
 import algorithm.helper as h
 
-class SplitNormDecoder(nn.Module):
-    """Applies separate LayerNorm to u and z before concatenating and passing to the decoder net."""
-    def __init__(self, d_u, d_z, net):
-        super().__init__()
-        self.d_u = d_u
-        self.norm_u = nn.LayerNorm(d_u)
-        self.norm_z = nn.LayerNorm(d_z)
-        self.net = net
-
-    def forward(self, x):
-        u, z = x[:, :self.d_u], x[:, self.d_u:]
-        return self.net(torch.cat([self.norm_u(u), self.norm_z(z)], dim=-1))
-
 
 def build_action_decoder(cfg, initialize=False, use_latent_state=True):
     """
@@ -48,11 +35,9 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
         else cfg.latent_action_dim
     )
 
-    # LayerNorm on first hidden layer (after Linear, before ReLU) — follows Q-function pattern.
-    # To revert: remove nn.LayerNorm(256) below.
     action_decoder = nn.Sequential(
+        nn.LayerNorm(input_dim),
         nn.Linear(input_dim, 256),
-        nn.LayerNorm(256),
         nn.ReLU(),
         nn.Linear(256, cfg.horizon * cfg.action_dim),
         nn.Tanh(),
