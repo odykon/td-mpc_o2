@@ -1,31 +1,17 @@
 """
-train_o2_immediate.py — O2 training with DDPG decoder active from the first step.
+train_o2_immediate_resume.py — O2 immediate training resumed from a phased checkpoint.
 
-Two phases only:
-  seed  (0 → mujoco_seed_steps):
-      Random action sampling, no updates.
+Downloads the intermediate model + buffer artifacts saved by train_o2_phased.py
+at mujoco_latent_start_steps, then continues with latent CEM + TOLD + decoder DDPG
+updates from that point. The decoder is initialised fresh — only the TOLD weights
+(encoder, dynamics, reward, Q, pi) are loaded from the checkpoint.
 
-  o2    (mujoco_seed_steps → mujoco_train_steps):
-      Latent CEM planning, TOLD (500/ep) + decoder DDPG (100/ep).
-      No warmup — decoder and latent CEM start together right after seed.
-
-Optionally start from a pre-trained TOLD checkpoint:
-  load_model: /path/to/model.pt   — loads TOLD weights only (decoder stays fresh)
-  load_buffer: /path/to/buf.pth   — restores the replay buffer
-  mujoco_step_offset: 20000       — shifts loop start + W&B env_step so curves
-                                    overlay correctly with the source run
-
-All step thresholds are in raw MuJoCo interactions and divided by
-action_repeat in load_cfg. One W&B run per (task, seed). Nothing is
-persisted locally — all artifacts (models, buffer, video) are uploaded
-directly to W&B and temp files are deleted immediately after.
+W&B env_step starts at mujoco_step_offset so curves overlay directly with the
+corresponding phased run in the same group.
 
 Usage:
-    python scripts/train_o2_immediate.py cfg=cfgs/exp_immediate.yaml task=walker-walk seed=1
-    python scripts/train_o2_immediate.py cfg=cfgs/exp_immediate.yaml task=walker-walk seed=1 \\
-        load_model=checkpoints/walker-walk/seed1/model.pt \\
-        load_buffer=checkpoints/walker-walk/seed1/buffer.pth \\
-        mujoco_step_offset=20000
+    python scripts/train_o2_immediate_resume.py task=walker-walk seed=1
+    python scripts/train_o2_immediate_resume.py cfg=cfgs/exp_immediate_resume.yaml task=walker-walk seed=1
 """
 
 import warnings
@@ -61,22 +47,23 @@ torch.backends.cudnn.benchmark = True
 
 CFG_PATH = REPO_ROOT / 'tdmpc' / 'cfgs'
 
-IMMEDIATE_DEFAULTS = {
-    # MuJoCo step thresholds (divided by action_repeat in load_cfg)
-    'mujoco_train_steps': 40000,
-    'mujoco_seed_steps':  4000,   # random exploration only; decoder + latent CEM start after
+RESUME_DEFAULTS = {
+    # Checkpoint origin — must match mujoco_latent_start_steps in the phased run
+    'mujoco_step_offset':  20000,
+    'mujoco_resume_steps': 20000,
 
-    # Schedule endpoints in MuJoCo steps (divided by action_repeat in load_cfg)
-    'mujoco_std_schedule_steps':     40000,
-    'mujoco_horizon_schedule_steps': 40000,
+    # Schedule endpoints in MuJoCo steps — set to match the phased run so
+    # std / horizon schedules are continuous across the boundary
+    'mujoco_std_schedule_steps':     10000,
+    'mujoco_horizon_schedule_steps': 10000,
 
     # Update cadence
-    'told_updates':    500,   # TOLD updates per episode (always, after seed)
-    'decoder_updates': 100,   # decoder updates per episode (after seed)
+    'told_updates':    500,
+    'decoder_updates': 100,
 
     # O2 architecture
     'latent_action_dim':  128,
-    'decoder_init':       True,
+    'decoder_init':       True,   # fresh decoder initialisation
     'use_latent_state':   True,
     'dcem_batch_size':    64,
     'latent_num_samples': 32,
@@ -93,20 +80,16 @@ IMMEDIATE_DEFAULTS = {
     # W&B
     'wandb_project': 'TDMPC_O2',
     'wandb_entity':  'odysseaskon-national-technical-university-of-athens',
-    'exp_name':      'o2_immediate',
+    'exp_name':      'o2_immediate_resume',
 
-    # Optional checkpoint loading (decoder keys are stripped — TOLD weights only)
-    'load_model':  None,
-    'load_buffer': None,
-    # Shifts loop start + W&B env_step; set to match the source run's step count
-    'mujoco_step_offset': 0,
-
-    # Required by TDMPC_O2 init; set to seed_steps in load_cfg
+    # Required by TDMPC_O2 init; set to 0 so o2 mode is active from step_offset
     'decoder_start_steps': 0,
     'latent_start_steps':  0,
+    # No seed phase — model is already trained
+    'seed_steps': 0,
 }
 
-
+# Keys belonging to the decoder and value network — excluded when loading TOLD weights
 _DECODER_KEY_PREFIXES = ('_action_decoder.', '_V.')
 
 
@@ -143,6 +126,8 @@ def train(cfg):
     assert torch.cuda.is_available(), 'CUDA is required.'
     set_seed(cfg.seed)
 
+    task_safe = cfg.task.replace('-', '_')
+
     wandb.init(
         project=cfg.wandb_project,
         entity=cfg.wandb_entity,
@@ -155,27 +140,48 @@ def train(cfg):
     agent  = TDMPC_O2(cfg)
     buffer = ReplayBuffer(cfg)
 
-    if cfg.get('load_model'):
-        ckpt = torch.load(cfg.load_model, map_location=agent.device)
+    # ── Download intermediate model (TOLD only) + buffer from W&B ────────────
+    api = wandb.Api()
+
+    model_tmp = tempfile.mkdtemp()
+    try:
+        art = api.artifact(
+            f"{cfg.wandb_entity}/{cfg.wandb_project}/"
+            f"intermediate_{task_safe}_seed{cfg.seed}:latest"
+        )
+        art.download(root=model_tmp)
+        model_file = glob.glob(os.path.join(model_tmp, '*.pt'))[0]
+        ckpt = torch.load(model_file, map_location=agent.device)
+
         model_sd  = ckpt['model']        if 'model'        in ckpt else ckpt
         target_sd = ckpt['model_target'] if 'model_target' in ckpt else None
+
         agent.model.load_state_dict(_strip_decoder_keys(model_sd), strict=False)
         if target_sd is not None:
             agent.model_target.load_state_dict(_strip_decoder_keys(target_sd), strict=False)
         else:
             agent.model_target.load_state_dict(agent.model.state_dict())
-        print(f'Loaded TOLD weights from {cfg.load_model} (decoder kept fresh).')
+        print(f'Loaded TOLD weights from intermediate checkpoint (decoder kept fresh).')
+    finally:
+        shutil.rmtree(model_tmp, ignore_errors=True)
 
-    if cfg.get('load_buffer'):
-        buffer.__dict__.update(torch.load(cfg.load_buffer, weights_only=False))
-        print(f'Loaded buffer from {cfg.load_buffer}.')
+    buffer_tmp = tempfile.mkdtemp()
+    try:
+        art = api.artifact(
+            f"{cfg.wandb_entity}/{cfg.wandb_project}/"
+            f"intermediate_buffer_{task_safe}_seed{cfg.seed}:latest"
+        )
+        art.download(root=buffer_tmp)
+        buffer_file = glob.glob(os.path.join(buffer_tmp, '*.pth'))[0]
+        buffer.__dict__.update(torch.load(buffer_file, weights_only=False))
+        print(f'Loaded intermediate buffer (seed {cfg.seed}).')
+    finally:
+        shutil.rmtree(buffer_tmp, ignore_errors=True)
 
     print('=' * 60)
     print(f'Task:               {cfg.task}')
-    print(f'Step offset:        {cfg.mujoco_step_offset:,}  MuJoCo')
-    print(f'Total MuJoCo steps: {cfg.mujoco_train_steps:,}')
-    if not cfg.get('load_model'):
-        print(f'  Seed ends at:     {cfg.mujoco_seed_steps:,}  MuJoCo')
+    print(f'Resuming from:      {cfg.mujoco_step_offset:,}  MuJoCo')
+    print(f'Running for:        {cfg.mujoco_resume_steps:,}  MuJoCo')
     print(f'TOLD updates/ep:    {cfg.told_updates}')
     print(f'Decoder updates/ep: {cfg.decoder_updates}')
     print(f'Seed:               {cfg.seed}')
@@ -185,22 +191,17 @@ def train(cfg):
     start_time  = time.time()
 
     for step in range(cfg.step_offset,
-                      cfg.step_offset + cfg.train_steps + cfg.episode_length,
+                      cfg.step_offset + cfg.resume_steps + cfg.episode_length,
                       cfg.episode_length):
-        phase = 'seed' if step < cfg.seed_steps else 'o2'
 
-        # Collect episode
+        # Collect episode with latent CEM
         t_ep = time.time()
         obs = env.reset()
         episode = Episode(cfg, obs)
         while not episode.done:
-            if phase == 'seed':
-                action_np = env.action_space.sample()
-                action = torch.tensor(action_np, dtype=torch.float32, device=agent.device)
-            else:
-                action, *_ = agent.CEM_in_latent(
-                    obs, step=step, t0=episode.first, sample_final_action=True
-                )
+            action, *_ = agent.CEM_in_latent(
+                obs, step=step, t0=episode.first, sample_final_action=True
+            )
             obs, reward, done, _ = env.step(action.cpu().numpy())
             episode += (obs, action, reward, done)
         buffer += episode
@@ -208,18 +209,13 @@ def train(cfg):
         ep_time = time.time() - t_ep
 
         # Updates
-        train_metrics = {}
-        dec_metrics   = {}
-        update_time   = 0.0
-        decoder_time  = 0.0
-        if phase == 'o2':
-            t_update = time.time()
-            train_metrics = update_tdmpc(agent, buffer, step)
-            update_time = time.time() - t_update
+        t_update = time.time()
+        train_metrics = update_tdmpc(agent, buffer, step)
+        update_time = time.time() - t_update
 
-            t_dec = time.time()
-            dec_metrics = update_decoder(agent, buffer, cfg, step)
-            decoder_time = time.time() - t_dec
+        t_dec = time.time()
+        dec_metrics = update_decoder(agent, buffer, cfg, step)
+        decoder_time = time.time() - t_dec
 
         env_step   = int(step * cfg.action_repeat)
         horizon    = int(linear_schedule(cfg.horizon_schedule, step))
@@ -228,7 +224,7 @@ def train(cfg):
 
         SEP = '─' * 42
         print(f'\n{SEP}')
-        print(f'  Episode {episode_idx}   step {env_step:,}   [{phase}]')
+        print(f'  Episode {episode_idx}   step {env_step:,}   [o2]')
         print(SEP)
         def row(label, val):
             print(f'  {label:<22}: {val}')
@@ -236,10 +232,8 @@ def train(cfg):
         row('Horizon',      f'{horizon:>10d}')
         row('Std',          f'{std:>10.3f}')
         row('Ep time',      f'{ep_time:>9.1f}s')
-        if update_time:
-            row('Update time',  f'{update_time:>9.1f}s')
-        if decoder_time:
-            row('Decoder time', f'{decoder_time:>9.1f}s')
+        row('Update time',  f'{update_time:>9.1f}s')
+        row('Decoder time', f'{decoder_time:>9.1f}s')
         grad_tracker = dec_metrics.pop('grad_tracker', [])
         for k, v in dec_metrics.items():
             row(k, f'{v:>10.4f}')
@@ -248,7 +242,6 @@ def train(cfg):
             row(k, f'{v:>10.4f}')
 
         wandb.log({
-            'phase':                1 if phase == 'o2' else 0,
             'episode':              episode_idx,
             'train/episode_reward': episode.cumulative_reward,
             'train/horizon':        horizon,
@@ -259,9 +252,8 @@ def train(cfg):
         }, step=env_step)
 
     # ── Final evaluation with video ──────────────────────────────────────────
-    total_step     = cfg.step_offset + cfg.train_steps
-    total_env_step = int(total_step * cfg.action_repeat)
-    eval_tmp       = tempfile.mkdtemp()
+    total_env_step = int((cfg.step_offset + cfg.resume_steps) * cfg.action_repeat)
+    eval_tmp = tempfile.mkdtemp()
     try:
         eval_metrics = evaluate_agent(
             env, agent, cfg,
@@ -282,7 +274,6 @@ def train(cfg):
         shutil.rmtree(eval_tmp, ignore_errors=True)
 
     # ── Upload final model + buffer ───────────────────────────────────────────
-    task_safe = cfg.task.replace('-', '_')
     _upload_model(agent,
         label=f"final_{task_safe}_seed{cfg.seed}",
         metadata={'task': cfg.task, 'seed': cfg.seed,
@@ -298,7 +289,7 @@ def train(cfg):
 
 def load_cfg() -> OmegaConf:
     cfg = parse_cfg(CFG_PATH)
-    cfg = OmegaConf.merge(OmegaConf.create(IMMEDIATE_DEFAULTS), cfg)
+    cfg = OmegaConf.merge(OmegaConf.create(RESUME_DEFAULTS), cfg)
 
     custom_path = cfg.get('cfg', None)
     if custom_path:
@@ -316,22 +307,17 @@ def load_cfg() -> OmegaConf:
 
     ar = cfg.action_repeat
 
-    cfg.train_steps  = int(cfg.mujoco_train_steps)  // ar
-    cfg.seed_steps   = int(cfg.mujoco_seed_steps)   // ar
     cfg.step_offset  = int(cfg.mujoco_step_offset)  // ar
-
-    # Decoder and latent CEM both start immediately after seed.
-    # When step_offset > 0 (resuming), seed_steps is already behind us.
-    cfg.decoder_start_steps = cfg.seed_steps
-    cfg.latent_start_steps  = cfg.seed_steps
+    cfg.resume_steps = int(cfg.mujoco_resume_steps) // ar
+    cfg.train_steps  = cfg.step_offset + cfg.resume_steps  # for buffer capacity + schedules
 
     std_steps     = int(cfg.mujoco_std_schedule_steps)     // ar
     horizon_steps = int(cfg.mujoco_horizon_schedule_steps) // ar
     cfg.std_schedule     = f"linear(0.5, {cfg.min_std}, {std_steps})"
     cfg.horizon_schedule = f"linear(1, {cfg.horizon}, {horizon_steps})"
 
-    assert cfg.seed_steps < cfg.train_steps, \
-        'mujoco_seed_steps must be < mujoco_train_steps'
+    assert cfg.mujoco_step_offset > 0, 'mujoco_step_offset must be > 0'
+    assert cfg.mujoco_resume_steps > 0, 'mujoco_resume_steps must be > 0'
 
     return cfg
 

@@ -148,6 +148,53 @@ def action_decoder_DDPG_update_v2(self, obs, u_mean, u_std, horizon, weights=Non
 
 
 # ---------------------------------------------------------------------------
+# 1c. Soft-value estimate — log-sum-exp over K fresh trajectory samples
+# ---------------------------------------------------------------------------
+
+def soft_value_estimate(self, u_mean, u_std, z, horizon, K, alpha):
+    """
+    Soft-max value estimate over K trajectories sampled fresh from N(u_mean, u_std).
+
+    Computes:
+        V_soft = alpha * log( (1/K) * sum_k exp(V^(k) / alpha) )
+
+    where each V^(k) is the estimated value of a trajectory decoded from
+    u^(k) ~ N(u_mean, u_std).  Uses rsample so gradients flow back through
+    u_mean and u_std into the decoder.
+
+    Numerically stable via the log-sum-exp trick: shifts by max_V (detached)
+    before exponentiating.
+
+    Args:
+        u_mean  [B, latent_action_dim]
+        u_std   [B, latent_action_dim]
+        z       [B, z_dim]  — already encoded and detached
+        horizon int
+        K       int   — number of fresh trajectory samples
+        alpha   float — temperature (→0: hard max, →∞: arithmetic mean)
+
+    Returns:
+        soft_val [B]
+    """
+    B = u_mean.shape[0]
+
+    eps    = torch.randn(K, B, u_mean.shape[-1], device=u_mean.device)
+    u_k    = u_mean.unsqueeze(0) + u_std.unsqueeze(0) * eps       # [K, B, latent_dim]
+    u_flat = u_k.reshape(K * B, -1)                               # [K*B, latent_dim]
+    z_rep  = z.repeat_interleave(K, dim=0)                        # [K*B, z_dim]
+
+    seq  = self.model.decode_sequence(u_flat, z_rep)              # [horizon, K*B, action_dim]
+    V    = self.estimate_value_with_grad(z_rep, seq, horizon).nan_to_num(0).squeeze(-1)
+    V_k  = V.reshape(K, B)                                        # [K, B]
+
+    max_V    = V_k.detach().max(dim=0).values                     # [B]
+    soft_val = max_V + alpha * torch.log(
+        torch.exp((V_k - max_V.unsqueeze(0)) / alpha).mean(dim=0)
+    )                                                             # [B]
+    return soft_val
+
+
+# ---------------------------------------------------------------------------
 # 2. Policy-gradient decoder update with learned value baseline (on-policy)
 # ---------------------------------------------------------------------------
 
