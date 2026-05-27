@@ -5,7 +5,7 @@ exp_name: o2_immediate
 # All divided by action_repeat automatically in load_cfg.
 # Decoder + latent CEM start immediately after seed — no warmup phase.
 mujoco_train_steps: 40000
-mujoco_seed_steps:  4000    # random exploration; o2 starts right after
+mujoco_seed_steps:  0       # buffer is pre-loaded; skip random exploration
 
 # ── Schedule endpoints (MuJoCo steps) ─────────────────────────────────────────
 mujoco_std_schedule_steps:     10000

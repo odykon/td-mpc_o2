@@ -23,8 +23,7 @@ for TASK in "${ENVS[@]}"; do
             task="$TASK" \
             seed="$SEED" \
             load_model="checkpoints/$TASK/$SEED/model.pt" \
-            load_buffer="checkpoints/$TASK/$SEED/buffer.pth" \
-            mujoco_step_offset=20000
+            load_buffer="checkpoints/$TASK/$SEED/buffer.pth"
     done
 done
 

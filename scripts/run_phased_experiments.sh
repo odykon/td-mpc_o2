@@ -3,7 +3,7 @@
 # Runs all 15 phased training experiments (5 envs × 3 seeds) sequentially.
 # Run from the repo root: bash scripts/run_phased_experiments.sh
 
-set -e
+set +e
 
 ENVS=("cheetah-run" "walker-walk" "hopper-hop" "humanoid-walk" "cartpole-swingup")
 SEEDS=(1 2 3)
