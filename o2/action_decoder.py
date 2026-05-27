@@ -43,7 +43,7 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
         nn.Tanh(),
     )
 
-    if initialize:
+    if initialize == 'identity':
         action_decoder = initialize_per_horizon_identity(
             action_decoder,
             d_u=cfg.latent_action_dim,
@@ -51,6 +51,8 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
             d_a=cfg.action_dim,
             H=cfg.horizon,
         )
+    elif initialize == 'orthogonal':
+        action_decoder = initialize_orthogonal(action_decoder)
 
     return action_decoder
 
@@ -71,6 +73,22 @@ def build_value_network(latent_dim, mlp_dim):
     
     return V_net
 
+
+
+def initialize_orthogonal(decoder):
+    """
+    Orthogonal init on all Linear layers, zero biases — consistent with TDMPC.
+    Gain for the hidden layer accounts for ReLU; output layer uses gain=1.
+    """
+    relu_gain = nn.init.calculate_gain('relu')
+    layers = list(decoder)
+    for i, layer in enumerate(layers):
+        if isinstance(layer, nn.Linear):
+            is_output = not any(isinstance(layers[j], nn.Linear) for j in range(i+1, len(layers)))
+            gain = 1.0 if is_output else relu_gain
+            nn.init.orthogonal_(layer.weight, gain=gain)
+            nn.init.zeros_(layer.bias)
+    return decoder
 
 
 def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):

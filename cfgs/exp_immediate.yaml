@@ -17,7 +17,7 @@ decoder_updates: 100   # decoder gradient updates per episode (after seed)
 
 # ── O2 architecture ───────────────────────────────────────────────────────────
 latent_action_dim:   128
-decoder_init:        false
+decoder_init:        orthogonal
 use_latent_state:    true
 dcem_batch_size:     64
 latent_num_samples:  32
