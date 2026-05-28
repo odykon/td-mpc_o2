@@ -171,8 +171,8 @@ def update_decoder(agent, buffer, cfg, step):
     for _ in range(agent.cfg.decoder_updates):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
                                             n=n, use_is_weights=use_is_weights)
-        _, u_mean, u_std, _, _, grad_tracker, diversity, log_det_loss = agent.DCEMethod_v2(obs, step=step, t0=False)
-        metrics = agent.action_decoder_DDPG_update_v2(obs, u_mean, u_std, horizon, weights, log_det_loss)
+        _, u_mean, _, _, _, grad_tracker, diversity, log_det_loss = agent.DCEMethod_v2(obs, step=step, t0=False)
+        metrics = agent.action_decoder_DDPG_update_v2(obs, u_mean, horizon, weights, log_det_loss)
         metrics.update(diversity)
         for k, v in metrics.items():
             accum[k] = accum.get(k, 0.0) + v

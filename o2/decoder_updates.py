@@ -17,21 +17,13 @@ Shared helpers:
     action_entropy_loss — SAC-style entropy regulariser
     saturation_loss — Tanh log-jacobian penalty (discourages action saturation)
 
-Saturation penalty options (both available in action_decoder_DDPG_update_v2):
+Saturation penalty (action_decoder_DDPG_update_v2):
 
-    Option 1 — Jacobian penalty (inline, fast):
+    Jacobian penalty (inline, fast):
         Computed directly from pretanh values already obtained via
         decode_sequence_pretanh. No extra sampling needed.
         jacobian_penalty = -log(1 - tanh(pretanh)^2 + eps).sum(-1).mean(0)  [B]
         cost = -(value - coeff * jacobian_penalty).mean()
-
-    Option 2 — Saturation loss (sampled, richer signal):
-        Samples from the CEM distribution, decodes each sample, and
-        computes the mean log-jacobian across the full distribution.
-        Captures saturation across the entire latent action distribution,
-        not just at the mean. More expensive than Option 1.
-        sat = saturation_loss(u_mean, u_std, z)  scalar
-        cost = -value.mean() + coeff * sat
 """
 
 import torch
@@ -77,7 +69,7 @@ def action_decoder_DDPG_update(self, obs, u_mean, horizon):
 # 1b. DDPG update v2 — with entropy regularization + saturation penalty
 # ---------------------------------------------------------------------------
 
-def action_decoder_DDPG_update_v2(self, obs, u_mean, u_std, horizon, weights=None, log_det_loss=None):
+def action_decoder_DDPG_update_v2(self, obs, u_mean, horizon, weights=None, log_det_loss=None):
     """
     DDPG-style decoder update with entropy regularization and saturation penalty.
 
@@ -89,12 +81,11 @@ def action_decoder_DDPG_update_v2(self, obs, u_mean, u_std, horizon, weights=Non
         obs:     [B, obs_dim] observation batch from the replay buffer.
         u_mean:  [B, latent_action_dim] differentiable latent action mean
                  obtained from DCEMethod(update_mode=True).
-        u_std:   [B, latent_action_dim] differentiable latent action std
-                 obtained from DCEMethod(update_mode=True).
         horizon: int planning horizon.
 
     Returns:
-        dict with keys: decoder_loss, decoder_grad_norm, saturation
+        dict with keys: decoder_loss, decoder_grad_norm, value_mean,
+        jacobian_penalty, saturation, z_norm, u_norm
     """
     self.action_dec_optim.zero_grad()
 
@@ -117,15 +108,6 @@ def action_decoder_DDPG_update_v2(self, obs, u_mean, u_std, horizon, weights=Non
     if log_det_loss is not None and diversity_coeff > 0:
         cost = cost + diversity_coeff * log_det_loss
 
-    # --- Option 2: saturation_loss (sampled across distribution) [B] ---
-    #saturation_coeff  = getattr(self.cfg, 'saturation_coeff', 0.0)
-    #sat_loss          = self.saturation_loss(u_mean, u_std, z) if saturation_coeff > 0 else 0.0
-    #per_sample_cost   = -(value - saturation_coeff * sat_loss)
-    #if weights is not None:
-    #    cost = (per_sample_cost * weights).mean()
-    #else:
-    #    cost = per_sample_cost.mean()
-
     cost.backward()
     grad_norm = torch.sqrt(sum(
         p.grad.norm() ** 2
@@ -144,6 +126,64 @@ def action_decoder_DDPG_update_v2(self, obs, u_mean, u_std, horizon, weights=Non
         'saturation':        saturation,
         'z_norm':            z_norm,
         'u_norm':            u_norm,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1b-debug. DDPG_v2 with per-timestep action gradient tracking
+# ---------------------------------------------------------------------------
+
+def action_decoder_DDPG_debug(self, obs, u_mean, horizon, weights=None, log_det_loss=None):
+    """
+    Identical to action_decoder_DDPG_update_v2 but retains the gradient on
+    the decoded sequence to measure how much gradient signal each timestep
+    receives. Returns an extra 'action_grad_norms' key: a list of `horizon`
+    floats, one per timestep (mean L2 norm over the batch).
+    """
+    self.action_dec_optim.zero_grad()
+
+    z                 = self.model.h(obs).detach()
+    z_norm            = z.norm(dim=-1).mean().item()
+    u_norm            = u_mean.norm(dim=-1).mean().item()
+    sequence, pretanh = self.model.decode_sequence_pretanh(u_mean, z)
+    sequence.retain_grad()
+    value             = self.estimate_value_with_grad(z, sequence, horizon).nan_to_num(0).squeeze(-1)
+    saturation        = pretanh.abs().mean().item()
+
+    jacobian_penalty  = -torch.log(1 - sequence.pow(2) + 1e-6).sum(-1).mean(0)  # [B]
+    per_sample_cost   = -(value - self.cfg.saturation_coeff * jacobian_penalty)
+    if weights is not None:
+        cost = (per_sample_cost * weights).mean()
+    else:
+        cost = per_sample_cost.mean()
+
+    diversity_coeff = getattr(self.cfg, 'diversity_coeff', 0.0)
+    if log_det_loss is not None and diversity_coeff > 0:
+        cost = cost + diversity_coeff * log_det_loss
+
+    cost.backward()
+
+    # sequence.grad: [horizon, B, action_dim] — norm over action_dim, mean over batch
+    action_grad_norms = sequence.grad.norm(dim=-1).mean(dim=1).tolist()  # [horizon]
+
+    grad_norm = torch.sqrt(sum(
+        p.grad.norm() ** 2
+        for p in self.model._action_decoder.parameters() if p.grad is not None
+    ))
+    dec_grad_clip = getattr(self.cfg, 'dec_grad_clip_norm', None)
+    if dec_grad_clip:
+        utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=dec_grad_clip)
+    self.action_dec_optim.step()
+
+    return {
+        'decoder_loss':      cost.item(),
+        'decoder_grad_norm': grad_norm.item(),
+        'value_mean':        value.mean().item(),
+        'jacobian_penalty':  jacobian_penalty.mean().item(),
+        'saturation':        saturation,
+        'z_norm':            z_norm,
+        'u_norm':            u_norm,
+        'action_grad_norms': action_grad_norms,
     }
 
 
