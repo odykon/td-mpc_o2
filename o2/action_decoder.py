@@ -36,6 +36,7 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
     )
 
     action_decoder = nn.Sequential(
+        nn.LayerNorm(input_dim),
         nn.Linear(input_dim, 256),
         nn.ReLU(),
         nn.Linear(256, cfg.horizon * cfg.action_dim),
