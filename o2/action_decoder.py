@@ -41,6 +41,12 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
         nn.Linear(256, cfg.horizon * cfg.action_dim),
         nn.Tanh(),
     )
+    action_decoder._hidden_norm = 0.0
+
+    def _hidden_norm_hook(module, input, output):
+        action_decoder._hidden_norm = output.norm(dim=-1).mean().item()
+
+    action_decoder[1].register_forward_hook(_hidden_norm_hook)
 
     if initialize == 'identity':
         action_decoder = initialize_per_horizon_identity(

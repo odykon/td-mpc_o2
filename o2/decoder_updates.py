@@ -127,6 +127,7 @@ def action_decoder_DDPG_update_v2(self, obs, u_mean, horizon, weights=None, log_
         'saturation':        saturation,
         'z_norm':            z_norm,
         'u_norm':            u_norm,
+        'hidden_norm':       self.model._action_decoder._hidden_norm,
     }
 
 
