@@ -38,8 +38,13 @@ class TDMPC_O2(TDMPC):
 
         self.model._action_decoder        = decoder
         self.model_target._action_decoder = deepcopy(decoder).to(self.device)
+
+        self.model._z_layernorm        = torch.nn.LayerNorm(cfg.latent_dim).to(self.device)
+        self.model_target._z_layernorm = torch.nn.LayerNorm(cfg.latent_dim).to(self.device)
+
         self.action_dec_optim = torch.optim.Adam(
-            self.model._action_decoder.parameters(), lr=cfg.lr
+            list(self.model._action_decoder.parameters()) +
+            list(self.model._z_layernorm.parameters()), lr=cfg.lr
         )
 
         self.model._V        = build_value_network(cfg.latent_dim, cfg.mlp_dim).to(self.device)

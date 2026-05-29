@@ -160,7 +160,8 @@ def decode_sequence(self, u, z):
         actions: [horizon, B, action_dim] decoded action sequence.
     """
     B = u.size(0)
-    dec_input = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
+    z_normed  = self._z_layernorm(z)
+    dec_input = torch.cat([u, z_normed], dim=-1) if self.cfg.use_latent_state else u
 
     actions = self._action_decoder(dec_input)
     return actions.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
@@ -173,7 +174,8 @@ def decode_sequence_pretanh(self, u, z):
         pretanh:   [horizon, B, action_dim]  pre-Tanh
     """
     B = u.size(0)
-    dec_input = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
+    z_normed  = self._z_layernorm(z)
+    dec_input = torch.cat([u, z_normed], dim=-1) if self.cfg.use_latent_state else u
 
     # forward through all layers except final Tanh
     x = dec_input
@@ -194,7 +196,7 @@ def track_TOLD_grad(self, enable=True):
         h.set_requires_grad(m, enable)
 
 def track_O2_grad(self, enable=True):
-    for m in [self._action_decoder, self._V]:
+    for m in [self._action_decoder, self._V, self._z_layernorm]:
         h.set_requires_grad(m, enable)
         if not enable:
             # O2 params are not in self.optim, so optim.zero_grad() never clears them.
