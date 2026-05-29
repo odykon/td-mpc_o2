@@ -39,7 +39,6 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
         nn.Linear(input_dim, 256),
         nn.ReLU(),
         nn.Linear(256, cfg.horizon * cfg.action_dim),
-        nn.Tanh(),
     )
     action_decoder._hidden_norm = 0.0
 
@@ -115,7 +114,7 @@ def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):
     Returns:
         The initialised decoder.
     """
-    fc1, relu, fc2, tanh = decoder
+    fc1, relu, fc2 = decoder
 
     with torch.no_grad():
         nn.init.zeros_(fc1.weight)
@@ -145,7 +144,7 @@ def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):
     return decoder
 
 
-def decode_sequence(self, u, z):
+def decode_sequence(self, u, z, return_pretanh=False):
     """
     Decode a latent action u into an action sequence.
 
@@ -153,42 +152,25 @@ def decode_sequence(self, u, z):
     'self' here refers to the TOLD model instance.
 
     Args:
-        u: [B, latent_action_dim] latent actions.
-        z: [B, latent_dim] latent states.
+        u:             [B, latent_action_dim] latent actions.
+        z:             [B, latent_dim] latent states.
+        return_pretanh: if True, also return pre-tanh values.
 
     Returns:
-        actions: [horizon, B, action_dim] decoded action sequence.
+        actions: [horizon, B, action_dim]
+        pretanh: [horizon, B, action_dim]  (only if return_pretanh=True)
     """
-    B = u.size(0)
-    z_normed  = self._z_layernorm(z)
-    dec_input = torch.cat([u, z_normed], dim=-1) if self.cfg.use_latent_state else u
+    B, H, d_a = u.size(0), self.cfg.horizon, self.cfg.action_dim
+    dec_input  = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
 
-    actions = self._action_decoder(dec_input)
-    return actions.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
+    x       = self._action_decoder(dec_input)
+    x       = self._action_layernorm(x.view(B, H, d_a))
+    pretanh = x.permute(1, 0, 2)           # [H, B, action_dim]
+    actions = torch.tanh(pretanh)
 
-def decode_sequence_pretanh(self, u, z):
-    """
-    Same as decode_sequence but also returns the pre-Tanh values.
-    Returns:
-        actions:   [horizon, B, action_dim]  post-Tanh
-        pretanh:   [horizon, B, action_dim]  pre-Tanh
-    """
-    B = u.size(0)
-    z_normed  = self._z_layernorm(z)
-    dec_input = torch.cat([u, z_normed], dim=-1) if self.cfg.use_latent_state else u
-
-    # forward through all layers except final Tanh
-    x = dec_input
-    for layer in self._action_decoder[:-1]:
-        x = layer(x)
-
-    # x is pre-Tanh
-    actions = torch.tanh(x)
-
-    actions = actions.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
-    pretanh = x.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
-
-    return actions, pretanh
+    if return_pretanh:
+        return actions, pretanh
+    return actions
     
 def track_TOLD_grad(self, enable=True):
     """Enables/disables gradient tracking of all TOLD components."""
@@ -196,7 +178,7 @@ def track_TOLD_grad(self, enable=True):
         h.set_requires_grad(m, enable)
 
 def track_O2_grad(self, enable=True):
-    for m in [self._action_decoder, self._V, self._z_layernorm]:
+    for m in [self._action_decoder, self._V, self._action_layernorm]:
         h.set_requires_grad(m, enable)
         if not enable:
             # O2 params are not in self.optim, so optim.zero_grad() never clears them.

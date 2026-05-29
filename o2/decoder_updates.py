@@ -92,7 +92,7 @@ def action_decoder_DDPG_update_v2(self, obs, u_mean, horizon, weights=None, log_
     z                 = self.model.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
     u_norm            = u_mean.norm(dim=-1).mean().item()
-    sequence, pretanh = self.model.decode_sequence_pretanh(u_mean, z)
+    sequence, pretanh = self.model.decode_sequence(u_mean, z, return_pretanh=True)
     value             = self.estimate_value_with_grad(z, sequence, horizon).nan_to_num(0).squeeze(-1)
     saturation        = pretanh.abs().mean().item()
 
@@ -147,7 +147,7 @@ def action_decoder_DDPG_debug(self, obs, u_mean, horizon, weights=None, log_det_
     z                 = self.model.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
     u_norm            = u_mean.norm(dim=-1).mean().item()
-    sequence, pretanh = self.model.decode_sequence_pretanh(u_mean, z)
+    sequence, pretanh = self.model.decode_sequence(u_mean, z, return_pretanh=True)
     sequence.retain_grad()
     value             = self.estimate_value_with_grad(z, sequence, horizon).nan_to_num(0).squeeze(-1)
     saturation        = pretanh.abs().mean().item()
@@ -501,7 +501,7 @@ def saturation_loss(self, u_mean, u_std, z_state, num_samples=20):
     u_flat     = u_samples.reshape(-1, u_samples.shape[-1])      # [S*B, latent_dim]
     z_repeated = z_state.repeat_interleave(num_samples, dim=0)   # [S*B, z_dim]
 
-    _, pretanh   = self.model.decode_sequence_pretanh(u_flat, z_repeated)  # [horizon, S*B, action_dim]
+    _, pretanh   = self.model.decode_sequence(u_flat, z_repeated, return_pretanh=True)  # [horizon, S*B, action_dim]
     actions      = torch.tanh(pretanh)
     log_jacobian = torch.log(1 - actions.pow(2) + 1e-6)                   # [horizon, S*B, action_dim]
 

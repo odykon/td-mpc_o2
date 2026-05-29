@@ -17,8 +17,7 @@ from copy import deepcopy
 
 from algorithm.tdmpc import TDMPC
 from o2.action_decoder import (build_action_decoder, decode_sequence,
-                                decode_sequence_pretanh, track_TOLD_grad,
-                                track_O2_grad, build_value_network)
+                                track_TOLD_grad, track_O2_grad, build_value_network)
 from o2.planning import DCEMethod, DCEMethod_v2, DCEMethod_planning, CEM_in_latent
 from o2.decoder_updates import (action_decoder_DDPG_update,
                                  action_decoder_DDPG_update_v2,
@@ -39,12 +38,12 @@ class TDMPC_O2(TDMPC):
         self.model._action_decoder        = decoder
         self.model_target._action_decoder = deepcopy(decoder).to(self.device)
 
-        self.model._z_layernorm        = torch.nn.LayerNorm(cfg.latent_dim).to(self.device)
-        self.model_target._z_layernorm = torch.nn.LayerNorm(cfg.latent_dim).to(self.device)
+        self.model._action_layernorm        = torch.nn.LayerNorm(cfg.action_dim).to(self.device)
+        self.model_target._action_layernorm = torch.nn.LayerNorm(cfg.action_dim).to(self.device)
 
         self.action_dec_optim = torch.optim.Adam(
             list(self.model._action_decoder.parameters()) +
-            list(self.model._z_layernorm.parameters()), lr=cfg.lr
+            list(self.model._action_layernorm.parameters()), lr=cfg.lr
         )
 
         self.model._V        = build_value_network(cfg.latent_dim, cfg.mlp_dim).to(self.device)
@@ -52,8 +51,7 @@ class TDMPC_O2(TDMPC):
         self.V_optim = torch.optim.Adam(self.model._V.parameters(), lr=cfg.lr)
 
         for model in [self.model, self.model_target]:
-            model.decode_sequence          = types.MethodType(decode_sequence, model)
-            model.decode_sequence_pretanh  = types.MethodType(decode_sequence_pretanh, model)
+            model.decode_sequence = types.MethodType(decode_sequence, model)
             model.track_TOLD_grad          = types.MethodType(track_TOLD_grad, model)
             model.track_O2_grad            = types.MethodType(track_O2_grad, model)
 
