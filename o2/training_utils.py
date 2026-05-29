@@ -166,7 +166,8 @@ def update_decoder(agent, buffer, cfg, step):
 
     n              = getattr(agent.cfg, 'dcem_sampling_n', None)
     use_is_weights = getattr(agent.cfg, 'use_is_weights', False)
-    accum          = {}
+    accum             = {}
+    grad_norm_max     = 0.0
     last_grad_tracker = []
     for _ in range(agent.cfg.decoder_updates):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
@@ -174,13 +175,14 @@ def update_decoder(agent, buffer, cfg, step):
         _, u_mean, _, _, _, grad_tracker, diversity, log_det_loss = agent.DCEMethod_v2(obs, step=step, t0=False)
         metrics = agent.action_decoder_DDPG_update_v2(obs, u_mean, horizon, weights, log_det_loss)
         metrics.update(diversity)
+        grad_norm_max = max(grad_norm_max, metrics['decoder_grad_norm'])
         for k, v in metrics.items():
             accum[k] = accum.get(k, 0.0) + v
         last_grad_tracker = grad_tracker
 
     agent.model.track_TOLD_grad(True)
     n_updates = agent.cfg.decoder_updates
-    return {k: v / n_updates for k, v in accum.items()} | {'grad_tracker': last_grad_tracker}
+    return {k: v / n_updates for k, v in accum.items()} | {'grad_tracker': last_grad_tracker, 'decoder_grad_norm_max': grad_norm_max}
 
 
 def update_decoder_pg(agent, episode, step):
