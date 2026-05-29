@@ -108,6 +108,7 @@ def action_decoder_DDPG_update_v2(self, obs, u_mean, horizon, weights=None, log_
     if log_det_loss is not None and diversity_coeff > 0:
         cost = cost + diversity_coeff * log_det_loss
 
+    cost.register_hook(lambda grad: grad * (1 / horizon))
     cost.backward()
     grad_norm = torch.sqrt(sum(
         p.grad.norm() ** 2
