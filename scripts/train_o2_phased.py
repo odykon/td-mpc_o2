@@ -218,13 +218,23 @@ def train(cfg):
         std        = linear_schedule(cfg.std_schedule, step)
         total_time = time.time() - start_time
 
+        # Per-episode eval in o2 phase
+        eval_reward = None
+        if phase == 'o2':
+            t_eval = time.time()
+            eval_m = evaluate_agent(env, agent, cfg, step=env_step, n_episodes=1, video_mode='none')
+            eval_reward = eval_m['mean_reward']
+            eval_time   = time.time() - t_eval
+
         SEP = '─' * 42
         print(f'\n{SEP}')
         print(f'  Episode {episode_idx}   step {env_step:,}   [{phase}]')
         print(SEP)
         def row(label, val):
             print(f'  {label:<22}: {val}')
-        row('Reward',       f'{episode.cumulative_reward:>10.1f}')
+        row('Train reward',  f'{episode.cumulative_reward:>10.1f}')
+        if eval_reward is not None:
+            row('Eval reward',   f'{eval_reward:>10.1f}')
         row('Horizon',      f'{horizon:>10d}')
         row('Std',          f'{std:>10.3f}')
         row('Ep time',      f'{ep_time:>9.1f}s')
@@ -232,6 +242,8 @@ def train(cfg):
             row('Update time',  f'{update_time:>9.1f}s')
         if decoder_time:
             row('Decoder time', f'{decoder_time:>9.1f}s')
+        if eval_reward is not None:
+            row('Eval time',    f'{eval_time:>9.1f}s')
         grad_tracker = dec_metrics.pop('grad_tracker', [])
         for k, v in dec_metrics.items():
             row(k, f'{v:>10.4f}')
@@ -248,6 +260,7 @@ def train(cfg):
             **{f'train/{k}': v for k, v in train_metrics.items()},
             **{f'decoder/{k}': v for k, v in dec_metrics.items()},
             **{f'decoder/dcem_iter_{i}_grad': g for i, g in grad_tracker},
+            **({'eval/episode_reward': eval_reward} if eval_reward is not None else {}),
         }, step=env_step)
 
         prev_phase = phase
