@@ -3,16 +3,16 @@ exp_name: o2_phased
 
 # ── MuJoCo step thresholds ────────────────────────────────────────────────────
 # All divided by action_repeat automatically in load_cfg.
-mujoco_train_steps:          40000   # total training (Phase 1 + Phase 2)
+mujoco_train_steps:          80000   # total training (Phase 1 + Phase 2)
 mujoco_seed_steps:           4000    # random exploration before any updates
-mujoco_decoder_start_steps:  18000   # decoder warm-up starts (5k MuJoCo before latent CEM)
-mujoco_latent_start_steps:   20000   # latent CEM starts (Phase 2 begins)
+mujoco_decoder_start_steps:  27000   # decoder warm-up starts (5k MuJoCo before latent CEM)
+mujoco_latent_start_steps:   30000   # latent CEM starts (Phase 2 begins)
 
 # ── Schedule endpoints (MuJoCo steps) ─────────────────────────────────────────
 # std decays  0.5 → min_std  over this many MuJoCo interactions
 # horizon grows 1 → horizon  over this many MuJoCo interactions
-mujoco_std_schedule_steps:     20000
-mujoco_horizon_schedule_steps: 20000
+mujoco_std_schedule_steps:     25000
+mujoco_horizon_schedule_steps: 25000
 
 # ── Update cadence ────────────────────────────────────────────────────────────
 told_updates:    500   # TOLD gradient updates per episode (all phases, after seed)
@@ -22,11 +22,11 @@ decoder_updates: 100   # decoder gradient updates per episode (warmup + o2 only)
 latent_action_dim:   128
 decoder_init:        false
 use_latent_state:    true
-dcem_batch_size:     64
+dcem_batch_size:     128
 latent_num_samples:  32
 latent_num_elites:   8
 lml_temperature:     1
-
+dec_grad_clip_norm:  1
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 eval_episodes: 1  # single final evaluation with video; no mid-training evals
