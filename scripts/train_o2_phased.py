@@ -79,7 +79,6 @@ PHASED_DEFAULTS = {
     'latent_num_samples': 32,
     'latent_num_elites':  8,
     'lml_temperature':    1,
-    'dcem_sampling_n':    None,
     'use_is_weights':     True,
     'dec_grad_clip_norm': 20,
 
@@ -96,31 +95,6 @@ PHASED_DEFAULTS = {
     'latent_start_steps':  0,
 }
 
-
-def _upload_model(agent, label: str, metadata: dict) -> None:
-    """Save model to a temp file, upload to W&B artifact, delete temp file."""
-    with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as f:
-        tmp_path = f.name
-    try:
-        agent.save(tmp_path)
-        art = wandb.Artifact(name=label, type='model', metadata=metadata)
-        art.add_file(tmp_path)
-        wandb.log_artifact(art)
-    finally:
-        os.unlink(tmp_path)
-
-
-def _upload_buffer(buffer, label: str, metadata: dict) -> None:
-    """Save replay buffer to a temp file, upload to W&B artifact, delete temp file."""
-    with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as f:
-        tmp_path = f.name
-    try:
-        torch.save(buffer.__dict__, tmp_path)
-        art = wandb.Artifact(name=label, type='buffer', metadata=metadata)
-        art.add_file(tmp_path)
-        wandb.log_artifact(art)
-    finally:
-        os.unlink(tmp_path)
 
 
 def train(cfg):
@@ -150,10 +124,8 @@ def train(cfg):
     print(f'Seed:                {cfg.seed}')
     print('=' * 60 + '\n')
 
-    episode_idx        = 0
-    start_time         = time.time()
-    saved_intermediate = False
-    prev_phase         = None
+    episode_idx = 0
+    start_time  = time.time()
 
     def row(label, val):
         print(f'  {label:<22}: {val}')
@@ -166,19 +138,6 @@ def train(cfg):
             phase = 'warmup'
         else:
             phase = 'o2'
-
-        # Upload intermediate model + buffer on first step of o2 phase
-        if phase == 'o2' and prev_phase != 'o2' and not saved_intermediate:
-            _upload_model(agent,
-                label=f"intermediate_{cfg.task.replace('-', '_')}_seed{cfg.seed}",
-                metadata={'task': cfg.task, 'seed': cfg.seed,
-                          'mujoco_step': cfg.mujoco_latent_start_steps})
-            _upload_buffer(buffer,
-                label=f"intermediate_buffer_{cfg.task.replace('-', '_')}_seed{cfg.seed}",
-                metadata={'task': cfg.task, 'seed': cfg.seed,
-                          'mujoco_step': cfg.mujoco_latent_start_steps})
-            saved_intermediate = True
-            print(f'Intermediate model + buffer uploaded at MuJoCo step {cfg.mujoco_latent_start_steps:,}.')
 
         # Collect episode
         t_ep = time.time()
@@ -250,8 +209,6 @@ def train(cfg):
             **{f'decoder/dcem_iter_{i}_grad': g for i, g in grad_tracker},
         }, step=env_step)
 
-        prev_phase = phase
-
     # ── Final evaluation with video ──────────────────────────────────────────
     total_step     = cfg.train_steps
     total_env_step = int(total_step * cfg.action_repeat)
@@ -274,16 +231,6 @@ def train(cfg):
         wandb.log(eval_log, step=total_env_step)
     finally:
         shutil.rmtree(eval_tmp, ignore_errors=True)
-
-    # ── Upload final model + buffer ───────────────────────────────────────────
-    _upload_model(agent,
-        label=f"final_{cfg.task.replace('-', '_')}_seed{cfg.seed}",
-        metadata={'task': cfg.task, 'seed': cfg.seed,
-                  'total_time_s': int(time.time() - start_time)})
-
-    _upload_buffer(buffer,
-        label=f"buffer_{cfg.task.replace('-', '_')}_seed{cfg.seed}",
-        metadata={'task': cfg.task, 'seed': cfg.seed})
 
     wandb.finish()
     print(f'\nDone. Total time: {(time.time() - start_time) / 60:.1f} min')
