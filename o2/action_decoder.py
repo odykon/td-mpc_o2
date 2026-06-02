@@ -6,8 +6,10 @@ Action decoder network for latent action space control.
 Provides:
     build_action_decoder            — constructs the decoder nn.Module
     initialize_per_horizon_identity — stable weight initialisation
+    initialize_orthogonal           — orthogonal weight initialisation
     decode_sequence                 — method attached to TOLD instances
-                                      via DCEM_TDMPC.__init__
+    decode_sequence_pretanh         — same, also returns pre-Tanh values
+    track_TOLD_grad / track_O2_grad — gradient enable/disable helpers
 """
 
 import torch
@@ -60,24 +62,6 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
         action_decoder = initialize_orthogonal(action_decoder)
 
     return action_decoder
-
-def build_value_network(latent_dim, mlp_dim):
-    """Build value network with zero-initialized output layer."""
-    V_net = nn.Sequential(
-        nn.Linear(latent_dim, mlp_dim),
-        nn.LayerNorm(mlp_dim),
-        nn.Tanh(),
-        nn.Linear(mlp_dim, mlp_dim),
-        nn.ELU(),
-        nn.Linear(mlp_dim, 1)
-    )
-    
-    # Zero-initialize last layer
-    nn.init.zeros_(V_net[-1].weight)
-    nn.init.zeros_(V_net[-1].bias)
-    
-    return V_net
-
 
 
 def initialize_orthogonal(decoder):
@@ -194,11 +178,10 @@ def track_TOLD_grad(self, enable=True):
         h.set_requires_grad(m, enable)
 
 def track_O2_grad(self, enable=True):
-    for m in [self._action_decoder, self._V]:
-        h.set_requires_grad(m, enable)
-        if not enable:
-            # O2 params are not in self.optim, so optim.zero_grad() never clears them.
-            # Zeroing here prevents stale decoder/V gradients from inflating
-            # clip_grad_norm_ during TOLD updates and causing over-clipping.
-            for p in m.parameters():
-                p.grad = None
+    h.set_requires_grad(self._action_decoder, enable)
+    if not enable:
+        # O2 params are not in self.optim, so optim.zero_grad() never clears them.
+        # Zeroing here prevents stale decoder gradients from inflating
+        # clip_grad_norm_ during TOLD updates and causing over-clipping.
+        for p in self._action_decoder.parameters():
+            p.grad = None

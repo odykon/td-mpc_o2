@@ -64,7 +64,7 @@ def evaluate_agent(env, agent, cfg, step, cem=False, LML=False, n_episodes=5, sa
                     compute_time_end = time.time()
                 elif LML:
                     compute_time_start= time.time()
-                    action, _, _, _, _ = agent.DCEMethod(obs, step=step_in_ep, t0=(step_in_ep == 0))
+                    action, _, _, _, _, _, _, _ = agent.DCEM(obs, step=step_in_ep)
                     compute_time_end = time.time()
                 else:
                     compute_time_start= time.time()
