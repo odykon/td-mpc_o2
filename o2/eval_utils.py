@@ -68,7 +68,7 @@ def evaluate_agent(env, agent, cfg, step, cem=False, LML=False, n_episodes=5, sa
                     compute_time_end = time.time()
                 else:
                     compute_time_start= time.time()
-                    action, _, _, _, _ = agent.CEM_in_latent(obs, step=step_in_ep, t0=(step_in_ep == 0))
+                    action, _, _, _, _ = agent.CEM_in_latent(obs, step=step_in_ep)
                     compute_time_end = time.time()
             obs, reward, done, _ = env.step(action.cpu().numpy())
             total_reward += reward

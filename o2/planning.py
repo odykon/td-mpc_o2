@@ -127,11 +127,10 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         sequence = self.model.decode_sequence(latent_action, z_enc)
         action   = sequence[0, :].squeeze_(0)
 
-    return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity, log_det_loss
+    return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity
 
 
-def CEM_in_latent(self, obs, update_mode=False, step=None, t0=True,
-                  seed=None, sample_final_action=False, lml_temperature=10):
+def CEM_in_latent(self, obs, step=None, sample_final_action=False):
     """
     Plan using vanilla (non-differentiable) CEM in latent action space.
 
@@ -146,8 +145,8 @@ def CEM_in_latent(self, obs, update_mode=False, step=None, t0=True,
     Returns:
         action, u_mean, u_std, latent_action, log_probs
     """
-    if not update_mode:
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+    obs = obs if isinstance(obs, torch.Tensor) else \
+          torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
     B = obs.shape[0]
     horizon = int(min(self.cfg.horizon, h.linear_schedule(self.cfg.horizon_schedule, step)))
 

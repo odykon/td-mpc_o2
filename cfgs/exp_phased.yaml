@@ -27,9 +27,6 @@ latent_num_samples:  32
 latent_num_elites:   8
 lml_temperature:     1
 
-# ── Decoder regularisation ────────────────────────────────────────────────────
-saturation_coeff:    0.0    # weight on saturation penalty; 0 = off
-diversity_coeff:     0.0    # weight on -log_det diversity loss; 0 = off
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 eval_episodes: 3   # single final evaluation with video; no mid-training evals

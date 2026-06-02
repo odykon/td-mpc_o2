@@ -80,7 +80,6 @@ PHASED_DEFAULTS = {
     'latent_num_elites':  8,
     'lml_temperature':    1,
     'dcem_sampling_n':    None,
-    'saturation_coeff':   0.0,
     'use_is_weights':     True,
     'dec_grad_clip_norm': 20,
 
@@ -156,6 +155,9 @@ def train(cfg):
     saved_intermediate = False
     prev_phase         = None
 
+    def row(label, val):
+        print(f'  {label:<22}: {val}')
+
     for step in range(0, cfg.train_steps + cfg.episode_length, cfg.episode_length):
         # Determine phase
         if step < cfg.decoder_start_steps:
@@ -190,7 +192,7 @@ def train(cfg):
                 action = agent.plan(obs, step=step, t0=episode.first)
             else:
                 action, *_ = agent.CEM_in_latent(
-                    obs, step=step, t0=episode.first, sample_final_action=True
+                    obs, step=step, sample_final_action=True
                 )
             obs, reward, done, _ = env.step(action.cpu().numpy())
             episode += (obs, action, reward, done)
@@ -222,8 +224,6 @@ def train(cfg):
         print(f'\n{SEP}')
         print(f'  Episode {episode_idx}   step {env_step:,}   [{phase}]')
         print(SEP)
-        def row(label, val):
-            print(f'  {label:<22}: {val}')
         row('Reward',       f'{episode.cumulative_reward:>10.1f}')
         row('Horizon',      f'{horizon:>10d}')
         row('Std',          f'{std:>10.3f}')
