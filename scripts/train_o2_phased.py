@@ -81,6 +81,7 @@ PHASED_DEFAULTS = {
     'lml_temperature':    1,
     'use_is_weights':     True,
     'dec_grad_clip_norm': 10.0,
+    'use_wandb':          True,
 
     # Eval (one at end with video)
     'eval_episodes': 1,
@@ -101,13 +102,14 @@ def train(cfg):
     assert torch.cuda.is_available(), 'CUDA is required.'
     set_seed(cfg.seed)
 
-    wandb.init(
-        project=cfg.wandb_project,
-        entity=cfg.wandb_entity,
-        group=cfg.task,
-        name=f"{cfg.exp_name}__seed{cfg.seed}",
-        config=OmegaConf.to_container(cfg, resolve=True),
-    )
+    if cfg.use_wandb:
+        wandb.init(
+            project=cfg.wandb_project,
+            entity=cfg.wandb_entity,
+            group=cfg.task,
+            name=f"{cfg.exp_name}__seed{cfg.seed}",
+            config=OmegaConf.to_container(cfg, resolve=True),
+        )
 
     env    = make_env(cfg)
     agent  = TDMPC_O2(cfg)
@@ -198,16 +200,17 @@ def train(cfg):
         for k, v in train_metrics.items():
             row(k, f'{v:>10.4f}')
 
-        wandb.log({
-            'phase':                phase_code,
-            'episode':              episode_idx,
-            'train/episode_reward': episode.cumulative_reward,
-            'train/horizon':        horizon,
-            'train/std':            std,
-            **{f'train/{k}': v for k, v in train_metrics.items()},
-            **{f'decoder/{k}': v for k, v in dec_metrics.items()},
-            **{f'decoder/dcem_iter_{i}_grad': g for i, g in grad_tracker},
-        }, step=env_step)
+        if cfg.use_wandb:
+            wandb.log({
+                'phase':                phase_code,
+                'episode':              episode_idx,
+                'train/episode_reward': episode.cumulative_reward,
+                'train/horizon':        horizon,
+                'train/std':            std,
+                **{f'train/{k}': v for k, v in train_metrics.items()},
+                **{f'decoder/{k}': v for k, v in dec_metrics.items()},
+                **{f'decoder/dcem_iter_{i}_grad': g for i, g in grad_tracker},
+            }, step=env_step)
 
     # ── Final evaluation with video ──────────────────────────────────────────
     total_step     = cfg.train_steps
@@ -225,14 +228,14 @@ def train(cfg):
             'eval/mean_reward': eval_metrics['mean_reward'],
             'eval/std_reward':  eval_metrics['std_reward'],
         }
-        videos = glob.glob(os.path.join(eval_tmp, 'videos', '*.mp4'))
-        if videos:
-            eval_log['eval/video'] = wandb.Video(videos[0], fps=30, format='mp4')
-        wandb.log(eval_log, step=total_env_step)
+        if cfg.use_wandb:
+            videos = glob.glob(os.path.join(eval_tmp, 'videos', '*.mp4'))
+            if videos:
+                eval_log['eval/video'] = wandb.Video(videos[0], fps=30, format='mp4')
+            wandb.log(eval_log, step=total_env_step)
+            wandb.finish()
     finally:
         shutil.rmtree(eval_tmp, ignore_errors=True)
-
-    wandb.finish()
     print(f'\nDone. Total time: {(time.time() - start_time) / 60:.1f} min')
 
 
