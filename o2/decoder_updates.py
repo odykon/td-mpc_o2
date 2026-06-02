@@ -35,7 +35,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None):
     z                 = self.model.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
     u_norm            = u_mean.norm(dim=-1).mean().item()
-    sequence, pretanh = self.model.decode_sequence_pretanh(u_mean, z)
+    sequence, pretanh = self.model.decode_sequence(u_mean, z, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()
 
     lam          = getattr(self.cfg, 'lambda_gae',   0.5)

@@ -16,8 +16,7 @@ from copy import deepcopy
 
 from algorithm.tdmpc import TDMPC
 from o2.action_decoder import (build_action_decoder, decode_sequence,
-                                decode_sequence_pretanh, track_TOLD_grad,
-                                track_O2_grad)
+                                track_TOLD_grad, track_O2_grad)
 from o2.planning import DCEM, CEM_in_latent
 from o2.decoder_updates import update_decoder_DDPG
 
@@ -39,9 +38,8 @@ class TDMPC_O2(TDMPC):
         )
 
         for model in [self.model, self.model_target]:
-            model.decode_sequence         = types.MethodType(decode_sequence, model)
-            model.decode_sequence_pretanh = types.MethodType(decode_sequence_pretanh, model)
-            model.track_TOLD_grad         = types.MethodType(track_TOLD_grad, model)
+            model.decode_sequence = types.MethodType(decode_sequence, model)
+            model.track_TOLD_grad = types.MethodType(track_TOLD_grad, model)
             model.track_O2_grad           = types.MethodType(track_O2_grad, model)
 
     def estimate_value_with_grad(self, z, actions, horizon, target=False):

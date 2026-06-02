@@ -4,11 +4,10 @@ action_decoder.py
 Action decoder network for latent action space control.
 
 Provides:
-    build_action_decoder            — constructs the decoder nn.Module
+    build_action_decoder            — constructs the decoder nn.Module (no Tanh output layer)
     initialize_per_horizon_identity — stable weight initialisation
     initialize_orthogonal           — orthogonal weight initialisation
-    decode_sequence                 — method attached to TOLD instances
-    decode_sequence_pretanh         — same, also returns pre-Tanh values
+    decode_sequence                 — method attached to TOLD instances; applies tanh externally
     track_TOLD_grad / track_O2_grad — gradient enable/disable helpers
 """
 
@@ -21,6 +20,8 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
     """
     Build the action decoder network.
 
+    Output layer has no activation — tanh is applied externally in decode_sequence.
+
     Args:
         cfg:              Config with latent_action_dim, latent_dim,
                           action_dim, horizon.
@@ -29,7 +30,7 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
                           If False, decoder input is u only.
 
     Returns:
-        nn.Sequential: the action decoder.
+        nn.Sequential: the action decoder (Linear -> ReLU -> Linear).
     """
     input_dim = (
         cfg.latent_action_dim + cfg.latent_dim
@@ -41,7 +42,6 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
         nn.Linear(input_dim, 256),
         nn.ReLU(),
         nn.Linear(256, cfg.horizon * cfg.action_dim),
-        nn.Tanh(),
     )
     action_decoder._hidden_norm = 0.0
 
@@ -90,7 +90,7 @@ def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):
     portion (if present) is zeroed and learned from scratch.
 
     Args:
-        decoder: nn.Sequential (Linear -> ReLU -> Linear -> Tanh)
+        decoder: nn.Sequential (Linear -> ReLU -> Linear)
         d_u:     latent_action_dim
         d_z:     latent_dim (0 if latent state not used)
         d_a:     action_dim
@@ -99,7 +99,7 @@ def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):
     Returns:
         The initialised decoder.
     """
-    fc1, relu, fc2, tanh = decoder
+    fc1, relu, fc2 = decoder
 
     with torch.no_grad():
         nn.init.zeros_(fc1.weight)
@@ -129,53 +129,39 @@ def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):
     return decoder
 
 
-def decode_sequence(self, u, z):
+def decode_sequence(self, u, z, return_pretanh=False):
     """
     Decode a latent action u into an action sequence.
 
-    Attached to TOLD instances via types.MethodType in DCEM_TDMPC.__init__.
-    'self' here refers to the TOLD model instance.
+    Tanh is applied externally here (not inside the network).
+    Attached to TOLD instances via types.MethodType in TDMPC_O2.__init__.
 
     Args:
-        u: [B, latent_action_dim] latent actions.
-        z: [B, latent_dim] latent states.
+        u:             [B, latent_action_dim] latent actions.
+        z:             [B, latent_dim] latent states.
+        return_pretanh: if True, also return pre-tanh values.
 
     Returns:
-        actions: [horizon, B, action_dim] decoded action sequence.
+        actions: [horizon, B, action_dim]
+        pretanh: [horizon, B, action_dim]  (only if return_pretanh=True)
     """
     B = u.size(0)
     dec_input = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
 
-    actions = self._action_decoder(dec_input)
-    return actions.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
-
-def decode_sequence_pretanh(self, u, z):
-    """
-    Same as decode_sequence but also returns the pre-Tanh values.
-    Returns:
-        actions:   [horizon, B, action_dim]  post-Tanh
-        pretanh:   [horizon, B, action_dim]  pre-Tanh
-    """
-    B = u.size(0)
-    dec_input = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
-
-    # forward through all layers except final Tanh
-    x = dec_input
-    for layer in self._action_decoder[:-1]:
-        x = layer(x)
-
-    # x is pre-Tanh
-    actions = torch.tanh(x)
-
-    actions = actions.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
+    x       = self._action_decoder(dec_input)
     pretanh = x.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)
+    actions = torch.tanh(pretanh)
 
-    return actions, pretanh
-    
+    if return_pretanh:
+        return actions, pretanh
+    return actions
+
+
 def track_TOLD_grad(self, enable=True):
     """Enables/disables gradient tracking of all TOLD components."""
     for m in [self._Q1, self._Q2, self._reward, self._dynamics, self._encoder, self._pi]:
         h.set_requires_grad(m, enable)
+
 
 def track_O2_grad(self, enable=True):
     h.set_requires_grad(self._action_decoder, enable)
