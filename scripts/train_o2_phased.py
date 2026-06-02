@@ -73,17 +73,17 @@ PHASED_DEFAULTS = {
 
     # O2 architecture
     'latent_action_dim':  128,
-    'decoder_init':       True,
+    'decoder_init':       False,
     'use_latent_state':   True,
     'dcem_batch_size':    64,
     'latent_num_samples': 32,
     'latent_num_elites':  8,
     'lml_temperature':    1,
     'use_is_weights':     True,
-    'dec_grad_clip_norm': 20,
+    'dec_grad_clip_norm': 10.0,
 
     # Eval (one at end with video)
-    'eval_episodes': 5,
+    'eval_episodes': 1,
 
     # W&B
     'wandb_project': 'TDMPC_O2',
