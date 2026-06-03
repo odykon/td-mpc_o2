@@ -83,6 +83,9 @@ PHASED_DEFAULTS = {
     'dec_grad_clip_norm': 10.0,
     'use_wandb':          True,
 
+    # Checkpointing (W&B artifacts; None = no intermediate saves)
+    'checkpoint_interval_steps': None,
+
     # Eval (one at end with video)
     'eval_episodes': 1,
 
@@ -96,6 +99,19 @@ PHASED_DEFAULTS = {
     'latent_start_steps':  0,
 }
 
+
+
+def _upload_model(agent, label: str, metadata: dict) -> None:
+    """Save model to a temp file, upload as W&B artifact, delete temp file."""
+    with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as f:
+        tmp_path = f.name
+    try:
+        agent.save(tmp_path)
+        art = wandb.Artifact(name=label, type='model', metadata=metadata)
+        art.add_file(tmp_path)
+        wandb.log_artifact(art)
+    finally:
+        os.unlink(tmp_path)
 
 
 def train(cfg):
@@ -126,8 +142,11 @@ def train(cfg):
     print(f'Seed:                {cfg.seed}')
     print('=' * 60 + '\n')
 
-    episode_idx = 0
-    start_time  = time.time()
+    episode_idx          = 0
+    start_time           = time.time()
+    task_safe            = cfg.task.replace('-', '_')
+    checkpoint_interval  = cfg.get('checkpoint_interval_steps', None)
+    last_checkpoint_idx  = -1
 
     def row(label, val):
         print(f'  {label:<22}: {val}')
@@ -200,6 +219,15 @@ def train(cfg):
         for k, v in train_metrics.items():
             row(k, f'{v:>10.4f}')
 
+        if cfg.use_wandb and checkpoint_interval:
+            ckpt_idx = env_step // checkpoint_interval
+            if ckpt_idx > last_checkpoint_idx:
+                last_checkpoint_idx = ckpt_idx
+                _upload_model(agent,
+                    label=f"checkpoint_{task_safe}_seed{cfg.seed}_step{env_step}",
+                    metadata={'task': cfg.task, 'seed': cfg.seed, 'mujoco_step': env_step})
+                print(f'Checkpoint saved at MuJoCo step {env_step:,}.')
+
         if cfg.use_wandb:
             wandb.log({
                 'phase':                phase_code,
@@ -234,6 +262,10 @@ def train(cfg):
             if videos:
                 eval_log['eval/video'] = wandb.Video(videos[0], fps=30, format='mp4')
             wandb.log(eval_log, step=total_env_step)
+            _upload_model(agent,
+                label=f"final_{task_safe}_seed{cfg.seed}",
+                metadata={'task': cfg.task, 'seed': cfg.seed,
+                          'total_time_s': int(time.time() - start_time)})
             wandb.finish()
     finally:
         shutil.rmtree(eval_tmp, ignore_errors=True)
