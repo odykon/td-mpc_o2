@@ -223,6 +223,7 @@ def train(cfg):
             n_episodes=cfg.eval_episodes,
             save_dir=eval_tmp,
             video_mode='first',
+            use_latent=(phase == 'o2'),
         )
         eval_log = {
             'eval/mean_reward': eval_metrics['mean_reward'],

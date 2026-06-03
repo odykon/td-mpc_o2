@@ -16,18 +16,19 @@ def make_save_dir_path(cfg, base_dir="results", timezone="Europe/Athens"):
     save_dir = os.path.join(base_dir, f"{exp_name}_{timestamp}")
     return save_dir
 
-def evaluate_agent(env, agent, cfg, step, cem=False, LML=False, n_episodes=5, save_dir=None, video_mode="none"):
+def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mode="none", use_latent=True):
     """
     Evaluate the agent and optionally save videos.
 
     Args:
-        env: Environment (DMControl or Gym-like)
-        agent: Agent with DCEMethod(obs, step, t0)
-        cfg: Config (optional)
-        step: Current training step number
-        n_episodes: Number of evaluation episodes
-        save_dir: Directory where videos are saved (optional)
-        video_mode: "first", "best_worst", or "none"
+        env:         Environment (DMControl or Gym-like)
+        agent:       TDMPC or TDMPC_O2 instance
+        cfg:         Config
+        step:        Current training step number
+        n_episodes:  Number of evaluation episodes
+        save_dir:    Directory where videos are saved (optional)
+        video_mode:  "first", "best_worst", or "none"
+        use_latent:  If True, plan with CEM_in_latent; if False, use standard agent.plan()
 
     Returns:
         eval_metrics (dict): Evaluation statistics and episode rewards.
@@ -49,27 +50,21 @@ def evaluate_agent(env, agent, cfg, step, cem=False, LML=False, n_episodes=5, sa
         done = False
         total_reward = 0.0
         step_in_ep = 0
-        total_compute_time =0
-        
+        total_compute_time = 0
+
         # Decide if this episode should record frames
         record = (video_mode == "first" and ep == 0) or (video_mode == "best_worst")
         frames = [] if record else None
-        
+
         episode_start = time.time()
         while not done:
             with torch.no_grad():
-                if cem:
-                    compute_time_start= time.time()
-                    action = agent.plan(obs, eval_mode =True, step=step_in_ep, t0=(step_in_ep == 0))
-                    compute_time_end = time.time()
-                elif LML:
-                    compute_time_start= time.time()
-                    action, _, _, _, _, _, _, _ = agent.DCEM(obs, step=step_in_ep)
-                    compute_time_end = time.time()
+                compute_time_start = time.time()
+                if use_latent:
+                    action, *_ = agent.CEM_in_latent(obs, step=step_in_ep)
                 else:
-                    compute_time_start= time.time()
-                    action, _, _, _, _ = agent.CEM_in_latent(obs, step=step_in_ep)
-                    compute_time_end = time.time()
+                    action = agent.plan(obs, eval_mode=True, step=step_in_ep, t0=(step_in_ep == 0))
+                compute_time_end = time.time()
             obs, reward, done, _ = env.step(action.cpu().numpy())
             total_reward += reward
             step_in_ep += 1
