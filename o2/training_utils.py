@@ -99,7 +99,7 @@ def update_decoder(agent, buffer, cfg, step):
     decoder_step = max(0, step - cfg.decoder_start_steps)
 
     lam_schedule = getattr(cfg, 'lambda_gae_schedule', None)
-    lam          = linear_schedule(lam_schedule, decoder_step) if lam_schedule else 0.5
+    lam          = linear_schedule(lam_schedule, decoder_step) if lam_schedule else 0.6
 
     use_is_weights    = getattr(agent.cfg, 'use_is_weights', False)
     accum             = {}

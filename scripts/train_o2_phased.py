@@ -83,8 +83,9 @@ PHASED_DEFAULTS = {
     'dec_grad_clip_norm': 10.0,
     'use_wandb':          True,
 
-    # Checkpointing (W&B artifacts; None = no intermediate saves)
-    'checkpoint_interval_steps': None,
+    # Checkpointing
+    'checkpoint_dir':            'checkpoints',  # local dir for phase1 model + buffer
+    'checkpoint_interval_steps': None,           # W&B artifact saves; None = disabled
 
     # Eval (one at end with video)
     'eval_episodes': 1,
@@ -147,6 +148,10 @@ def train(cfg):
     task_safe            = cfg.task.replace('-', '_')
     checkpoint_interval  = cfg.get('checkpoint_interval_steps', None)
     last_checkpoint_idx  = -1
+    saved_phase1         = False
+
+    # Create checkpoint dir once at the start so it exists when we need it
+    os.makedirs(cfg.checkpoint_dir, exist_ok=True)
 
     def row(label, val):
         print(f'  {label:<22}: {val}')
@@ -159,6 +164,17 @@ def train(cfg):
             phase = 'warmup'
         else:
             phase = 'o2'
+
+        # Save Phase 1 checkpoint the first time we enter the o2 phase.
+        # train_tdmpc_continue.py will load these to start its Phase 2 run
+        # from exactly the same model and buffer state as this run.
+        if phase == 'o2' and not saved_phase1:
+            model_path  = os.path.join(cfg.checkpoint_dir, f'{task_safe}_seed{cfg.seed}_phase1.pt')
+            buffer_path = os.path.join(cfg.checkpoint_dir, f'{task_safe}_seed{cfg.seed}_phase1_buffer.pth')
+            torch.save(agent.model.state_dict(), model_path)
+            torch.save(buffer.__dict__, buffer_path)
+            saved_phase1 = True
+            print(f'Phase 1 checkpoint saved to {cfg.checkpoint_dir}/')
 
         # Collect episode
         t_ep = time.time()
