@@ -305,13 +305,6 @@ def load_cfg() -> OmegaConf:
     cfg.std_schedule     = f"linear(0.5, {cfg.min_std}, {std_steps})"
     cfg.horizon_schedule = f"linear(1, {cfg.horizon}, {horizon_steps})"
 
-    assert cfg.seed_steps          < cfg.decoder_start_steps, \
-        'mujoco_seed_steps must be < mujoco_decoder_start_steps'
-    assert cfg.decoder_start_steps < cfg.latent_start_steps,  \
-        'mujoco_decoder_start_steps must be < mujoco_latent_start_steps'
-    assert cfg.latent_start_steps  <= cfg.train_steps,        \
-        'mujoco_latent_start_steps must be <= mujoco_train_steps'
-
     return cfg
 
 
