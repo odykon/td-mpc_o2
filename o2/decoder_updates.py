@@ -8,7 +8,7 @@ import torch
 import torch.nn.utils as utils
 
 
-def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, lambda_gae=None):
+def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, lambda_gae=None, log_det_loss=None):
     """
     DDPG-style decoder update using a GAE-weighted sum of n-step TD targets.
 
@@ -54,6 +54,10 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, lambda_gae=Non
         cost = (per_sample_cost * weights).mean()
     else:
         cost = per_sample_cost.mean()
+
+    diversity_coeff = getattr(self.cfg, 'diversity_coeff', 0.0)
+    if log_det_loss is not None and diversity_coeff > 0:
+        cost = cost + diversity_coeff * log_det_loss
 
     cost.register_hook(lambda grad: grad * (1 / horizon))
     cost.backward()

@@ -127,7 +127,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         sequence = self.model.decode_sequence(latent_action, z_enc)
         action   = sequence[0, :].squeeze_(0)
 
-    return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity
+    return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity, log_det_loss
 
 
 def CEM_in_latent(self, obs, step=None, sample_final_action=False):

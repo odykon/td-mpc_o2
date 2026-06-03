@@ -108,8 +108,8 @@ def update_decoder(agent, buffer, cfg, step):
     for _ in range(agent.cfg.decoder_updates):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
                                             use_is_weights=use_is_weights)
-        _, u_mean, _, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
-        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, lambda_gae=lam)
+        _, u_mean, _, _, _, grad_tracker, diversity, log_det_loss = agent.DCEM(obs, step=step)
+        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, lambda_gae=lam, log_det_loss=log_det_loss)
         metrics.update(diversity)
         grad_norm_max = max(grad_norm_max, metrics['decoder_grad_norm'])
         for k, v in metrics.items():
