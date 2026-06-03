@@ -8,7 +8,7 @@ import torch
 import torch.nn.utils as utils
 
 
-def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None):
+def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, lambda_gae=None):
     """
     DDPG-style decoder update using a GAE-weighted sum of n-step TD targets.
 
@@ -38,7 +38,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None):
     sequence, pretanh = self.model.decode_sequence(u_mean, z, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()
 
-    lam          = getattr(self.cfg, 'lambda_gae',   0.5)
+    lam          = lambda_gae if lambda_gae is not None else 0.5
     gae_horizons = getattr(self.cfg, 'gae_horizons', 5)
 
     gae_weights = [(1 - lam) * lam**(h - 1) for h in range(1, gae_horizons)]

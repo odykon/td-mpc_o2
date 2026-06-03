@@ -95,7 +95,11 @@ def update_decoder(agent, buffer, cfg, step):
         grad_tracker (from last iteration) and decoder_grad_norm_max.
     """
     agent.model.track_TOLD_grad(False)
-    horizon = int(linear_schedule(cfg.horizon_schedule, step))
+    horizon      = int(linear_schedule(cfg.horizon_schedule, step))
+    decoder_step = max(0, step - cfg.decoder_start_steps)
+
+    lam_schedule = getattr(cfg, 'lambda_gae_schedule', None)
+    lam          = linear_schedule(lam_schedule, decoder_step) if lam_schedule else 0.5
 
     use_is_weights    = getattr(agent.cfg, 'use_is_weights', False)
     accum             = {}
@@ -105,7 +109,7 @@ def update_decoder(agent, buffer, cfg, step):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
                                             use_is_weights=use_is_weights)
         _, u_mean, _, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
-        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights)
+        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, lambda_gae=lam)
         metrics.update(diversity)
         grad_norm_max = max(grad_norm_max, metrics['decoder_grad_norm'])
         for k, v in metrics.items():
