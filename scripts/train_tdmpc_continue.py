@@ -73,13 +73,13 @@ def train(cfg):
     agent  = TDMPC(cfg)
     buffer = ReplayBuffer(cfg)
 
-    state = torch.load(model_path, map_location=agent.device)
+    state = torch.load(model_path, map_location=agent.device, weights_only=False)
     agent.model.load_state_dict(state, strict=False)
     print(f'Loaded Phase 1 model:  {model_path}')
 
     # Restore the full buffer state (priorities, indices, tensors) so
     # the TOLD update distribution is identical to the o2_phased run.
-    buffer_state = torch.load(buffer_path, map_location=buffer.device)
+    buffer_state = torch.load(buffer_path, map_location=buffer.device, weights_only=False)
     buffer.__dict__.update(buffer_state)
     print(f'Loaded Phase 1 buffer: {buffer_path}')
 
