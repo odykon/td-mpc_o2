@@ -7,7 +7,7 @@ mujoco_train_steps:          80000   # total training (Phase 1 + Phase 2)
 mujoco_seed_steps:           4000    # random exploration before any updates
 mujoco_decoder_start_steps:  27000   # decoder warm-up starts (5k MuJoCo before latent CEM)
 mujoco_latent_start_steps:   30000   # latent CEM starts (Phase 2 begins)
-checkpoint_interval_steps:   None   # save checkpoint every this many MuJoCo steps 
+checkpoint_interval_steps:   null   # save checkpoint every this many MuJoCo steps 
 # ── Schedule endpoints (MuJoCo steps) ─────────────────────────────────────────
 # std decays  0.5 → min_std  over this many MuJoCo interactions
 # horizon grows 1 → horizon  over this many MuJoCo interactions

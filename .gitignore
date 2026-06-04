@@ -8,4 +8,9 @@ tdmpc-o-2-training-2.ipynb
 input.py
 CLAUDE.md
 notes/
+plots/
+wandb_data/
+wandb/
+checkpoints/
+download_runs.py
 
