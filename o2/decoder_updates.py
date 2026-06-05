@@ -23,7 +23,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
         obs:     [B, obs_dim] observation batch from the replay buffer.
         u_mean:  [B, latent_action_dim] differentiable latent action mean
                  obtained from DCEM().
-        horizon: int planning horizon (used for gradient scaling).
+        horizon: int planning horizon (used as GAE rollout length).
         weights: optional [B] importance-sampling weights.
 
     Returns:
@@ -39,7 +39,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     saturation        = pretanh.abs().mean().item()
 
     lam          = getattr(self.cfg, 'lambda_gae', 0.5)
-    gae_horizons = getattr(self.cfg, 'gae_horizons', 5)
+    gae_horizons = horizon
 
     gae_weights = [(1 - lam) * lam**(h - 1) for h in range(1, gae_horizons)]
     gae_weights.append(lam**(gae_horizons - 1))
@@ -59,7 +59,6 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     if log_det_loss is not None and diversity_coeff > 0:
         cost = cost + diversity_coeff * log_det_loss
 
-    cost.register_hook(lambda grad: grad * (1 / horizon))
     cost.backward()
     grad_norm = torch.sqrt(sum(
         p.grad.norm() ** 2

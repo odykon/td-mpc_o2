@@ -33,7 +33,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     iteration during backward(). The grad_tracker list is populated only
     after cost.backward() is called by the caller.
 
-    Also computes action diversity metrics from the first CEM iteration
+    Also computes action diversity metrics from the last CEM iteration
     (action_var, log_det, effective_rank) without tracking gradients.
 
     Args:
@@ -79,8 +79,8 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
             sequence = self.model.decode_sequence(u_flat, z)
 
-            # Action diversity from first CEM iteration
-            if i == 0:
+            # Action diversity from last CEM iteration
+            if i == self.cfg.iterations - 1:
                 N, H, A  = self.cfg.latent_num_samples, sequence.shape[0], sequence.shape[-1]
                 seq      = sequence.view(H, B, N, A)
                 seq_c    = seq - seq.mean(dim=2, keepdim=True)

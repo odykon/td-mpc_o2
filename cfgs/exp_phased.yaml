@@ -3,7 +3,7 @@ exp_name: GAN_tryNo2
 
 # ── MuJoCo step thresholds ────────────────────────────────────────────────────
 # All divided by action_repeat automatically in load_cfg.
-mujoco_train_steps:          80000   # total training (Phase 1 + Phase 2)
+mujoco_train_steps:          60000   # total training (Phase 1 + Phase 2)
 mujoco_seed_steps:           4000    # random exploration before any updates
 mujoco_decoder_start_steps:  27000   # decoder warm-up starts (5k MuJoCo before latent CEM)
 mujoco_latent_start_steps:   30000   # latent CEM starts (Phase 2 begins)
@@ -19,7 +19,7 @@ told_updates:    500   # TOLD gradient updates per episode (all phases, after se
 decoder_updates: 100   # decoder gradient updates per episode (warmup + o2 only)
 
 # ── O2 architecture ───────────────────────────────────────────────────────────
-latent_action_dim:   128
+latent_action_dim:   50
 decoder_init:        false
 use_latent_state:    true
 dcem_batch_size:     128
