@@ -138,15 +138,16 @@ def update_decoder_pg(agent, episode, step, alpha_v=0.0):
     """
     agent.model.track_TOLD_grad(False)
 
-    accum     = {}
-    n_batches = 0
+    accum             = {}
+    n_batches         = 0
+    last_grad_tracker = []
     for obs, reward, obs_t1, latent_action in episode.sample_batches(
             batch_size=agent.cfg.dcem_batch_size, shuffle=True):
 
         with torch.no_grad():
             z_t  = agent.model.h(obs)
             z_t1 = agent.model.h(obs_t1)
-        _, u_mean, u_std, _, _, _, diversity, log_det_loss = agent.DCEM(obs, step=step)
+        _, u_mean, u_std, _, _, grad_tracker, diversity, log_det_loss = agent.DCEM(obs, step=step)
 
         pg_metrics = agent.PG_withV(z_t, z_t1, u_mean, u_std, reward, latent_action,
                                     alpha_v, log_det_loss=log_det_loss)
@@ -155,8 +156,9 @@ def update_decoder_pg(agent, episode, step, alpha_v=0.0):
         metrics = {**pg_metrics, 'v_loss': v_loss.item(), **diversity}
         for k, v in metrics.items():
             accum[k] = accum.get(k, 0.0) + (v.item() if hasattr(v, 'item') else v)
+        last_grad_tracker = grad_tracker
         n_batches += 1
 
     agent.model.track_TOLD_grad(True)
     n = max(n_batches, 1)
-    return {k: v / n for k, v in accum.items()}
+    return {k: v / n for k, v in accum.items()} | {'grad_tracker': last_grad_tracker}
