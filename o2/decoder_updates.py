@@ -107,13 +107,12 @@ def PG_withV(self, z_t, z_t1, u_mean, u_std, reward, original_action,
 
     advantage = q_target - self.model._V(z_t).squeeze(-1).detach()
     log_probs = torch.distributions.Normal(u_mean, u_std).log_prob(original_action).mean(dim=1)
-    entropy   = log_det_loss if log_det_loss is not None else self.action_entropy_loss(u_mean, u_std, z_t, num_samples=20)
+    entropy   = self.action_entropy_loss(u_mean, u_std, z_t, num_samples=20)
     pg_loss   = log_probs * advantage
 
     decoder_loss = -(pg_loss + alpha_v * entropy).mean()
     self.action_dec_optim.zero_grad()
     decoder_loss.backward()
-    utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=1)
     self.action_dec_optim.step()
 
     return {
