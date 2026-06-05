@@ -6,6 +6,7 @@ Off-policy DDPG-style decoder update with GAE-weighted multi-horizon value targe
 
 import torch
 import torch.nn.utils as utils
+from torch.distributions import MultivariateNormal
 
 
 def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=None):
@@ -79,3 +80,124 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
         'hidden_norm':       self.model._action_decoder._hidden_norm,
         'lambda_gae':        lam,
     }
+
+
+def PG_withV(self, z_t, z_t1, u_mean, u_std, reward, original_action,
+             alpha_v, log_det_loss=None):
+    """
+    On-policy REINFORCE update for the decoder with a TD(0) value baseline.
+
+    Args:
+        z_t:             [B, latent_dim] encoded current obs (pre-computed)
+        z_t1:            [B, latent_dim] encoded next obs (pre-computed, shared with V_net_update)
+        u_mean:          [B, latent_action_dim] current distribution mean (from DCEM)
+        u_std:           [B, latent_action_dim] current distribution std (from DCEM)
+        reward:          [B] rewards at current step
+        original_action: [B, latent_action_dim] latent actions from rollout
+        alpha_v:         float entropy coefficient
+        log_det_loss:    differentiable diversity term from DCEM (optional)
+
+    Returns:
+        dict of scalar metrics for logging
+    """
+    gamma = 0.99
+
+    with torch.no_grad():
+        q_target  = reward + gamma * self.model._V(z_t1).squeeze(-1)
+
+    advantage = q_target - self.model._V(z_t).squeeze(-1).detach()
+    log_probs = torch.distributions.Normal(u_mean, u_std).log_prob(original_action).mean(dim=1)
+    entropy   = log_det_loss if log_det_loss is not None else self.action_entropy_loss(u_mean, u_std, z_t, num_samples=20)
+    pg_loss   = log_probs * advantage
+
+    decoder_loss = -(pg_loss + alpha_v * entropy).mean()
+    self.action_dec_optim.zero_grad()
+    decoder_loss.backward()
+    utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=1)
+    self.action_dec_optim.step()
+
+    return {
+        'decoder_loss': decoder_loss,
+        'pg_loss':      pg_loss.mean(),
+        'entropy':      entropy.mean(),
+        'advantage':    advantage.mean(),
+        'log_probs':    log_probs.mean(),
+    }
+
+
+def V_net_update(self, reward, z_t, z_t1):
+    """
+    One-step TD(0) update for the value baseline network _V.
+
+    Args:
+        reward  (Tensor): [B]
+        z_t     (Tensor): [B, latent_dim] encoded current obs (pre-computed)
+        z_t1    (Tensor): [B, latent_dim] encoded next obs (pre-computed, shared with PG_withV)
+
+    Returns:
+        Tensor: scalar MSE loss
+    """
+    gamma = 0.99
+
+    with torch.no_grad():
+        target = reward + gamma * self.model._V(z_t1).squeeze(-1)
+
+    v_loss = (target - self.model._V(z_t).squeeze(-1)).pow(2).mean()
+
+    self.V_optim.zero_grad()
+    v_loss.backward()
+    self.V_optim.step()
+
+    return v_loss
+
+
+def action_entropy_loss(self, u_mean, u_std, z_state, num_samples=20, horizon=5):
+    """
+    Entropy of the decoded action distribution (encourages action diversity).
+
+    Samples latent vectors, decodes them, computes empirical covariance, and
+    returns the entropy of the resulting multivariate Gaussian.
+
+    Args:
+        u_mean      (Tensor): [B, latent_dim]
+        u_std       (Tensor): [B, latent_dim]
+        z_state     (Tensor): [B, z_dim]
+        num_samples (int):    Monte-Carlo samples per batch element
+        horizon     (int):    planning horizon
+
+    Returns:
+        Tensor: [B] per-batch-element entropy (mean over horizon)
+    """
+    batch      = u_mean.shape[0]
+    action_dim = self.cfg.action_dim
+
+    u_dist     = torch.distributions.Normal(u_mean, u_std)
+    u_samples  = u_dist.rsample((num_samples,))                  # [S, B, latent_dim]
+    u_flat     = u_samples.reshape(-1, u_samples.shape[-1])      # [S*B, latent_dim]
+    z_repeated = z_state.repeat_interleave(num_samples, dim=0)   # [S*B, z_dim]
+
+    decoded_seq = self.model.decode_sequence(u_flat, z_repeated) # [horizon, S*B, action_dim]
+
+    x = (
+        decoded_seq
+        .permute(1, 0, 2)                                        # [S*B, horizon, action_dim]
+        .reshape(num_samples, batch, horizon, action_dim)
+        .permute(1, 2, 0, 3)                                     # [B, horizon, S, action_dim]
+    )
+
+    x_mean     = x.mean(dim=2, keepdim=True)
+    x_centered = x - x_mean
+    cov = (1.0 / (num_samples - 1)) * torch.matmul(
+        x_centered.transpose(2, 3),
+        x_centered,
+    )
+
+    B, T, _, D = cov.shape
+    mean_flat  = x_mean.squeeze(2).reshape(B * T, D)
+    cov_flat   = cov.reshape(B * T, D, D)
+
+    mvn          = MultivariateNormal(loc=mean_flat, covariance_matrix=cov_flat)
+    entropy_flat = mvn.entropy()
+    entropy      = entropy_flat.view(B, T)
+
+    return entropy.mean(dim=1)  # [B] — mean over horizon, keep batch

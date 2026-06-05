@@ -129,6 +129,21 @@ def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):
     return decoder
 
 
+def build_value_network(latent_dim, mlp_dim):
+    """Build value network with zero-initialized output layer."""
+    V_net = nn.Sequential(
+        nn.Linear(latent_dim, mlp_dim),
+        nn.LayerNorm(mlp_dim),
+        nn.Tanh(),
+        nn.Linear(mlp_dim, mlp_dim),
+        nn.ELU(),
+        nn.Linear(mlp_dim, 1)
+    )
+    nn.init.zeros_(V_net[-1].weight)
+    nn.init.zeros_(V_net[-1].bias)
+    return V_net
+
+
 def decode_sequence(self, u, z, return_pretanh=False):
     """
     Decode a latent action u into an action sequence.
@@ -164,10 +179,11 @@ def track_TOLD_grad(self, enable=True):
 
 
 def track_O2_grad(self, enable=True):
-    h.set_requires_grad(self._action_decoder, enable)
-    if not enable:
-        # O2 params are not in self.optim, so optim.zero_grad() never clears them.
-        # Zeroing here prevents stale decoder gradients from inflating
-        # clip_grad_norm_ during TOLD updates and causing over-clipping.
-        for p in self._action_decoder.parameters():
-            p.grad = None
+    for m in [self._action_decoder, self._V]:
+        h.set_requires_grad(m, enable)
+        if not enable:
+            # O2 params are not in self.optim, so optim.zero_grad() never clears them.
+            # Zeroing here prevents stale decoder/V gradients from inflating
+            # clip_grad_norm_ during TOLD updates and causing over-clipping.
+            for p in m.parameters():
+                p.grad = None

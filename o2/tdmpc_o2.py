@@ -16,9 +16,10 @@ from copy import deepcopy
 
 from algorithm.tdmpc import TDMPC
 from o2.action_decoder import (build_action_decoder, decode_sequence,
-                                track_TOLD_grad, track_O2_grad)
+                                track_TOLD_grad, track_O2_grad,
+                                build_value_network)
 from o2.planning import DCEM, CEM_in_latent
-from o2.decoder_updates import update_decoder_DDPG
+from o2.decoder_updates import update_decoder_DDPG, PG_withV, action_entropy_loss, V_net_update
 
 
 class TDMPC_O2(TDMPC):
@@ -36,6 +37,10 @@ class TDMPC_O2(TDMPC):
         self.action_dec_optim = torch.optim.Adam(
             self.model._action_decoder.parameters(), lr=cfg.lr
         )
+
+        self.model._V        = build_value_network(cfg.latent_dim, cfg.mlp_dim).to(self.device)
+        self.model_target._V = deepcopy(self.model._V).to(self.device)
+        self.V_optim = torch.optim.Adam(self.model._V.parameters(), lr=cfg.lr)
 
         for model in [self.model, self.model_target]:
             model.decode_sequence = types.MethodType(decode_sequence, model)
@@ -61,3 +66,12 @@ class TDMPC_O2(TDMPC):
 
     def update_decoder_DDPG(self, *args, **kwargs):
         return update_decoder_DDPG(self, *args, **kwargs)
+
+    def PG_withV(self, *args, **kwargs):
+        return PG_withV(self, *args, **kwargs)
+
+    def action_entropy_loss(self, *args, **kwargs):
+        return action_entropy_loss(self, *args, **kwargs)
+
+    def V_net_update(self, *args, **kwargs):
+        return V_net_update(self, *args, **kwargs)
