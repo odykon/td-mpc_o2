@@ -58,6 +58,35 @@ class TDMPC_O2(TDMPC):
         G += discount * torch.min(*m.Q(z, m.pi(z, self.cfg.min_std)))
         return G
 
+    def estimate_value_GAE(self, z, actions, horizon):
+        """GAE value estimate in a single forward pass.
+
+        V_λ = Σ_h w_h * V_h, where
+            w_h = (1 - λ) * λ^(h-1)  for h < H
+            w_H = λ^(H-1)             (absorbs remaining weight)
+
+        O(H) model forward passes vs O(H²) for repeated estimate_value_with_grad calls.
+        Produces identical gradients w.r.t. leaf tensors.
+        """
+        lam     = getattr(self.cfg, 'lambda_gae', 0.5)
+        m       = self.model
+        G_gae   = 0
+        R       = 0
+        discount = 1
+        lam_pow  = 1
+        z_t      = z
+
+        for t in range(horizon):
+            z_t, reward  = m.next(z_t, actions[t])
+            R            = R + discount * reward
+            discount    *= self.cfg.discount
+            V_h          = R + discount * torch.min(*m.Q(z_t, m.pi(z_t, self.cfg.min_std)))
+            w_h          = (1 - lam) * lam_pow if t < horizon - 1 else lam_pow
+            G_gae        = G_gae + w_h * V_h
+            lam_pow     *= lam
+
+        return G_gae
+
     def DCEM(self, *args, **kwargs):
         return DCEM(self, *args, **kwargs)
 

@@ -39,16 +39,8 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     sequence, pretanh = self.model.decode_sequence(u_mean, z, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()
 
-    lam          = getattr(self.cfg, 'lambda_gae', 0.5)
-    gae_horizons = horizon
-
-    gae_weights = [(1 - lam) * lam**(h - 1) for h in range(1, gae_horizons)]
-    gae_weights.append(lam**(gae_horizons - 1))
-
-    value = sum(
-        w * self.estimate_value_with_grad(z, sequence, h).nan_to_num(0).squeeze(-1)
-        for w, h in zip(gae_weights, range(1, gae_horizons + 1))
-    )
+    value = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
+    lam   = getattr(self.cfg, 'lambda_gae', 0.5)
 
     per_sample_cost = -value
     if weights is not None:
