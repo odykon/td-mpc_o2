@@ -9,7 +9,7 @@ import torch.nn.utils as utils
 from torch.distributions import MultivariateNormal
 
 
-def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=None):
+def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=None, u_std=None):
     """
     DDPG-style decoder update using a GAE-weighted sum of n-step TD targets.
 
