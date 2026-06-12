@@ -34,9 +34,10 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     self.action_dec_optim.zero_grad()
 
     z                 = self.model.h(obs).detach()
+    z_dec             = self.model_target.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
     u_norm            = u_mean.norm(dim=-1).mean().item()
-    sequence, pretanh = self.model.decode_sequence(u_mean, z, return_pretanh=True)
+    sequence, pretanh = self.model.decode_sequence(u_mean, z_dec, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()
 
     value = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)

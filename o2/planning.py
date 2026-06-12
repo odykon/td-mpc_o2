@@ -62,9 +62,10 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     grad_tracker = []
 
     with torch.enable_grad():
-        z_enc = self.model.h(obs).detach()                                   # [B, z_dim]
-        z = z_enc.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1)
-        z = z.view(B * self.cfg.latent_num_samples, -1)
+        z_enc        = self.model.h(obs).detach()                            # [B, z_dim] — CEM rollouts
+        z_enc_target = self.model_target.h(obs).detach()                     # [B, z_dim] — decoder input
+        z     = z_enc.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+        z_dec = z_enc_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
 
         u_mean = torch.zeros(B, self.cfg.latent_action_dim,
                              device=self.cfg.device, requires_grad=True)
@@ -77,7 +78,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
             u_samples = u_mean.unsqueeze(1) + u_std.unsqueeze(1) * u_noise
             u_flat    = u_samples.view(B * self.cfg.latent_num_samples, self.cfg.latent_action_dim)
 
-            sequence = self.model.decode_sequence(u_flat, z)
+            sequence = self.model.decode_sequence(u_flat, z_dec)
 
             # Action diversity from last CEM iteration
             if i == self.cfg.iterations - 1:
@@ -124,7 +125,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         latent_action = dist.rsample() if sample_final_action else u_mean
         log_probs     = dist.log_prob(latent_action).squeeze_(0).sum(dim=0)
 
-        sequence = self.model.decode_sequence(latent_action, z_enc)
+        sequence = self.model.decode_sequence(latent_action, z_enc_target)
         action   = sequence[0, :].squeeze_(0)
 
     return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity, log_det_loss
@@ -151,9 +152,10 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
     horizon = int(min(self.cfg.horizon, h.linear_schedule(self.cfg.horizon_schedule, step)))
 
     with torch.no_grad():
-        z = self.model.h(obs)
-        z = z.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1)
-        z = z.view(B * self.cfg.latent_num_samples, -1)
+        z        = self.model.h(obs)
+        z_target = self.model_target.h(obs)
+        z     = z.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+        z_dec = z_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
 
         u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device)
         u_std  = 2 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
@@ -163,7 +165,7 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
                                     device=self.cfg.device)
             u_samples = u_mean.unsqueeze(0) + u_std.unsqueeze(0) * u_noise  # [N, d_u]
 
-            sequence = self.model.decode_sequence(u_samples, z)
+            sequence = self.model.decode_sequence(u_samples, z_dec)
             value    = self.estimate_value(z, sequence, horizon).squeeze(1)  # [N]
 
             elite_idxs    = torch.topk(value, self.cfg.latent_num_elites, dim=0).indices
@@ -175,13 +177,12 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
             u_mean = self.cfg.momentum * u_mean + (1 - self.cfg.momentum) * u_m
             u_std  = u_s
 
-        z_0   = self.model.h(obs)
         dist  = torch.distributions.Normal(loc=u_mean, scale=u_std)
         latent_action = dist.rsample() if sample_final_action else u_mean
         latent_action = latent_action.unsqueeze(0)
 
         log_probs = dist.log_prob(latent_action).squeeze_(0).mean(dim=0)
-        sequence  = self.model.decode_sequence(latent_action, z_0)
+        sequence  = self.model.decode_sequence(latent_action, z_target)
         action    = sequence[0, :].squeeze_(0)
 
     return action, u_mean, u_std, latent_action, log_probs
