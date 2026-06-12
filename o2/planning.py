@@ -96,7 +96,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                     effective_rank = p.mul(-1).mul(torch.log(p + 1e-8)).sum(dim=-1).exp().mean().item()
                     diversity      = {'action_var': action_var, 'log_det': -log_det_loss.item(), 'effective_rank': effective_rank}
 
-            value    = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
+            value    = self.estimate_value_GAE(z, sequence, horizon).view(B, self.cfg.latent_num_samples)
 
             mu     = value.mean(dim=1, keepdim=True).detach()
             sigma  = value.std(dim=1, keepdim=True).detach()
