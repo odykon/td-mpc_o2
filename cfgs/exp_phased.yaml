@@ -1,5 +1,5 @@
 # ── Task (set via CLI: task=walker-walk seed=1) ───────────────────────────────
-exp_name: GAE_efficient_early_start
+exp_name: GAE_frozen_z_decoding
 
 # ── MuJoCo step thresholds ────────────────────────────────────────────────────
 # All divided by action_repeat automatically in load_cfg.
@@ -19,7 +19,7 @@ told_updates:    500   # TOLD gradient updates per episode (all phases, after se
 decoder_updates: 80   # decoder gradient updates per episode (warmup + o2 only)
 
 # ── O2 architecture ───────────────────────────────────────────────────────────
-latent_action_dim:   50
+latent_action_dim:   128
 decoder_init:        false
 use_latent_state:    true
 dcem_batch_size:     128
