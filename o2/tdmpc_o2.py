@@ -10,6 +10,7 @@ Adds to TDMPC:
     - Decoder update:  off-policy DDPG with GAE value targets
 """
 
+import math
 import types
 import torch
 from copy import deepcopy
@@ -28,8 +29,8 @@ class TDMPC_O2(TDMPC):
 
         decoder = build_action_decoder(
             cfg,
-            initialize=cfg.decoder_init,
             use_latent_state=cfg.use_latent_state,
+            use_raw_obs=getattr(cfg, 'use_raw_obs', False),
         ).to(self.device)
 
         self.model._action_decoder        = decoder
@@ -42,12 +43,19 @@ class TDMPC_O2(TDMPC):
         self.model_target._V = deepcopy(self.model._V).to(self.device)
         self.V_optim = torch.optim.Adam(self.model._V.parameters(), lr=cfg.lr)
 
+        self.log_det_target = getattr(cfg, 'log_det_target', -float(cfg.action_dim))
+        init_coeff = max(getattr(cfg, 'diversity_coeff', 0.01), 1e-8)
+        self.log_alpha_diversity = torch.nn.Parameter(
+            torch.tensor([math.log(init_coeff)], device=self.device)
+        )
+        self.alpha_diversity_optim = torch.optim.Adam([self.log_alpha_diversity], lr=3e-4)
+
         for model in [self.model, self.model_target]:
             model.decode_sequence = types.MethodType(decode_sequence, model)
             model.track_TOLD_grad = types.MethodType(track_TOLD_grad, model)
             model.track_O2_grad           = types.MethodType(track_O2_grad, model)
 
-    def estimate_value_with_grad(self, z, actions, horizon, target=False):
+    def estimate_value_with_grad(self, z, actions, horizon, target=Fßßßßalse):
         """estimate_value without @torch.no_grad() — needed for gradient flow in DCEM."""
         m = self.model_target if target else self.model
         G, discount = 0, 1

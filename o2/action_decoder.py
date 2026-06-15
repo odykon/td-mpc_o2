@@ -4,10 +4,8 @@ action_decoder.py
 Action decoder network for latent action space control.
 
 Provides:
-    build_action_decoder            — constructs the decoder nn.Module (no Tanh output layer)
-    initialize_per_horizon_identity — stable weight initialisation
-    initialize_orthogonal           — orthogonal weight initialisation
-    decode_sequence                 — method attached to TOLD instances; applies tanh externally
+    build_action_decoder — constructs the decoder nn.Module (no Tanh output layer)
+    decode_sequence      — method attached to TOLD instances; applies tanh externally
     track_TOLD_grad / track_O2_grad — gradient enable/disable helpers
 """
 
@@ -16,27 +14,32 @@ import torch.nn as nn
 import algorithm.helper as h
 
 
-def build_action_decoder(cfg, initialize=False, use_latent_state=True):
+def build_action_decoder(cfg, use_latent_state=True, use_raw_obs=False):
     """
     Build the action decoder network.
 
     Output layer has no activation — tanh is applied externally in decode_sequence.
 
+    Conditioning modes (mutually exclusive, use_raw_obs takes priority):
+        use_raw_obs=True:      input is [u, obs]  — raw observation
+        use_latent_state=True: input is [u, z]    — encoded latent state
+        both False:            input is u only
+
     Args:
         cfg:              Config with latent_action_dim, latent_dim,
-                          action_dim, horizon.
-        initialize:       If True, apply per-horizon identity initialisation.
-        use_latent_state: If True, decoder input is [u, z] concatenated.
-                          If False, decoder input is u only.
+                          action_dim, horizon, obs_shape.
+        use_latent_state: Concatenate encoded latent state z to u.
+        use_raw_obs:      Concatenate raw observation to u (overrides use_latent_state).
 
     Returns:
         nn.Sequential: the action decoder (Linear -> ReLU -> Linear).
     """
-    input_dim = (
-        cfg.latent_action_dim + cfg.latent_dim
-        if use_latent_state
-        else cfg.latent_action_dim
-    )
+    if use_raw_obs:
+        input_dim = cfg.latent_action_dim + cfg.obs_shape[0]
+    elif use_latent_state:
+        input_dim = cfg.latent_action_dim + cfg.latent_dim
+    else:
+        input_dim = cfg.latent_action_dim
 
     action_decoder = nn.Sequential(
         nn.Linear(input_dim, 256),
@@ -50,83 +53,7 @@ def build_action_decoder(cfg, initialize=False, use_latent_state=True):
 
     action_decoder[1].register_forward_hook(_hidden_norm_hook)
 
-    if initialize == 'identity':
-        action_decoder = initialize_per_horizon_identity(
-            action_decoder,
-            d_u=cfg.latent_action_dim,
-            d_z=cfg.latent_dim if use_latent_state else 0,
-            d_a=cfg.action_dim,
-            H=cfg.horizon,
-        )
-    elif initialize == 'orthogonal':
-        action_decoder = initialize_orthogonal(action_decoder)
-
     return action_decoder
-
-
-def initialize_orthogonal(decoder):
-    """
-    Orthogonal init on all Linear layers, zero biases — consistent with TDMPC.
-    Gain for the hidden layer accounts for ReLU; output layer uses gain=1.
-    """
-    relu_gain = nn.init.calculate_gain('relu')
-    layers = list(decoder)
-    for i, layer in enumerate(layers):
-        if isinstance(layer, nn.Linear):
-            is_output = not any(isinstance(layers[j], nn.Linear) for j in range(i+1, len(layers)))
-            gain = 1.0 if is_output else relu_gain
-            nn.init.orthogonal_(layer.weight, gain=gain)
-            nn.init.zeros_(layer.bias)
-    return decoder
-
-
-def initialize_per_horizon_identity(decoder, d_u, d_z, d_a, H):
-    """
-    Initialise decoder layers so that each horizon step maps directly from
-    latent action to action, forming a blockwise near-identity mapping.
-
-    Uses ReLU(x) - ReLU(-x) = x to implement identity through the bottleneck.
-    Only the latent action portion of the input is mapped — the latent state
-    portion (if present) is zeroed and learned from scratch.
-
-    Args:
-        decoder: nn.Sequential (Linear -> ReLU -> Linear)
-        d_u:     latent_action_dim
-        d_z:     latent_dim (0 if latent state not used)
-        d_a:     action_dim
-        H:       horizon
-
-    Returns:
-        The initialised decoder.
-    """
-    fc1, relu, fc2 = decoder
-
-    with torch.no_grad():
-        nn.init.zeros_(fc1.weight)
-        nn.init.zeros_(fc1.bias)
-        nn.init.zeros_(fc2.weight)
-        nn.init.zeros_(fc2.bias)
-
-        for t in range(H):
-            for i in range(d_a):
-                latent_idx = t * d_a + i
-                if latent_idx >= d_u:
-                    break
-
-                h_pos = 2 * latent_idx
-                h_neg = 2 * latent_idx + 1
-
-                fc1.weight[h_pos, latent_idx] =  1.0
-                fc1.weight[h_neg, latent_idx] = -1.0
-
-                out_idx = t * d_a + i
-                fc2.weight[out_idx, h_pos] =  1.0
-                fc2.weight[out_idx, h_neg] = -1.0
-
-        fc1.weight += 1e-3 * torch.randn_like(fc1.weight)
-        fc2.weight += 1e-3 * torch.randn_like(fc2.weight)
-
-    return decoder
 
 
 def build_value_network(latent_dim, mlp_dim):
@@ -144,7 +71,7 @@ def build_value_network(latent_dim, mlp_dim):
     return V_net
 
 
-def decode_sequence(self, u, z, return_pretanh=False):
+def decode_sequence(self, u, cond, return_pretanh=False):
     """
     Decode a latent action u into an action sequence.
 
@@ -152,8 +79,9 @@ def decode_sequence(self, u, z, return_pretanh=False):
     Attached to TOLD instances via types.MethodType in TDMPC_O2.__init__.
 
     Args:
-        u:             [B, latent_action_dim] latent actions.
-        z:             [B, latent_dim] latent states.
+        u:              [B, latent_action_dim] latent actions.
+        cond:           [B, cond_dim] conditioning signal — either encoded
+                        latent state z or raw observation depending on cfg.
         return_pretanh: if True, also return pre-tanh values.
 
     Returns:
@@ -161,7 +89,11 @@ def decode_sequence(self, u, z, return_pretanh=False):
         pretanh: [horizon, B, action_dim]  (only if return_pretanh=True)
     """
     B = u.size(0)
-    dec_input = torch.cat([u, z], dim=-1) if self.cfg.use_latent_state else u
+    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
+    if use_raw_obs or self.cfg.use_latent_state:
+        dec_input = torch.cat([u, cond], dim=-1)
+    else:
+        dec_input = u
 
     x       = self._action_decoder(dec_input)
     pretanh = x.view(B, self.cfg.horizon, self.cfg.action_dim).permute(1, 0, 2)

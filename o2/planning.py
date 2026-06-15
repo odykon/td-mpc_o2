@@ -24,6 +24,7 @@ import algorithm.helper as h
 from lml import LML
 
 
+
 def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     """
     Differentiable CEM in latent action space with per-iteration gradient tracking.
@@ -33,13 +34,11 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     iteration during backward(). The grad_tracker list is populated only
     after cost.backward() is called by the caller.
 
-    Also computes action diversity metrics from the last CEM iteration
-    (action_var, log_det, effective_rank) without tracking gradients.
+    Also computes GMM diversity metrics from the last CEM iteration.
 
     Args:
         obs:                 [B, obs_dim] or raw numpy observation.
         step:                Current training step (for horizon schedule).
-        t0:                  Whether this is the first step of an episode.
         sample_final_action: If True, sample from the final distribution
                              instead of using the mean.
         use_target:          If True, use the target network for value estimation.
@@ -51,8 +50,8 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         latent_action: [B, latent_action_dim] latent action that was decoded.
         log_probs:     scalar                 log prob of latent_action.
         grad_tracker:  list of (iteration, grad_norm) tuples (populated after backward).
-        diversity:     dict with action_var, log_det, effective_rank.
-        log_det_loss:  differentiable log-det diversity term.
+        diversity:     dict with action_var and GMM metrics.
+        gmm_loss:      differentiable GMM diversity loss.
     """
     obs = obs if isinstance(obs, torch.Tensor) else \
           torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -61,11 +60,17 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
     grad_tracker = []
 
+    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
+
     with torch.enable_grad():
-        z_enc        = self.model.h(obs).detach()                            # [B, z_dim] — CEM rollouts
-        z_enc_target = self.model_target.h(obs).detach()                     # [B, z_dim] — decoder input
+        z_enc = self.model.h(obs).detach()                                   # [B, z_dim] — CEM rollouts
         z     = z_enc.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
-        z_dec = z_enc_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+
+        if use_raw_obs:
+            cond_dec = obs.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+        else:
+            z_enc_target = self.model_target.h(obs).detach()                 # [B, z_dim] — decoder input
+            cond_dec = z_enc_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
 
         u_mean = torch.zeros(B, self.cfg.latent_action_dim,
                              device=self.cfg.device, requires_grad=True)
@@ -73,12 +78,12 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                                 device=self.cfg.device, requires_grad=True)
 
         for i in range(self.cfg.iterations):
-            u_noise  = torch.randn(B, self.cfg.latent_num_samples,
-                                   self.cfg.latent_action_dim, device=self.cfg.device)
+            u_noise   = torch.randn(B, self.cfg.latent_num_samples,
+                                    self.cfg.latent_action_dim, device=self.cfg.device)
             u_samples = u_mean.unsqueeze(1) + u_std.unsqueeze(1) * u_noise
             u_flat    = u_samples.view(B * self.cfg.latent_num_samples, self.cfg.latent_action_dim)
 
-            sequence = self.model.decode_sequence(u_flat, z_dec)
+            sequence = self.model.decode_sequence(u_flat, cond_dec)
 
             # Action diversity from last CEM iteration
             if i == self.cfg.iterations - 1:
@@ -96,7 +101,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                     effective_rank = p.mul(-1).mul(torch.log(p + 1e-8)).sum(dim=-1).exp().mean().item()
                     diversity      = {'action_var': action_var, 'log_det': -log_det_loss.item(), 'effective_rank': effective_rank}
 
-            value    = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
+            value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
 
             mu     = value.mean(dim=1, keepdim=True).detach()
             sigma  = value.std(dim=1, keepdim=True).detach()
@@ -125,7 +130,8 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         latent_action = dist.rsample() if sample_final_action else u_mean
         log_probs     = dist.log_prob(latent_action).squeeze_(0).sum(dim=0)
 
-        sequence = self.model.decode_sequence(latent_action, z_enc_target)
+        cond_final = obs if use_raw_obs else self.model_target.h(obs).detach()
+        sequence = self.model.decode_sequence(latent_action, cond_final)
         action   = sequence[0, :].squeeze_(0)
 
     return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity, log_det_loss
@@ -151,11 +157,18 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
     B = obs.shape[0]
     horizon = int(min(self.cfg.horizon, h.linear_schedule(self.cfg.horizon_schedule, step)))
 
+    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
+    self.std = h.linear_schedule(self.cfg.std_schedule, step)
+
     with torch.no_grad():
-        z        = self.model.h(obs)
-        z_target = self.model_target.h(obs)
+        z     = self.model.h(obs)
         z     = z.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
-        z_dec = z_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+
+        if use_raw_obs:
+            cond_dec = obs.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+        else:
+            z_target = self.model_target.h(obs)
+            cond_dec = z_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
 
         u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device)
         u_std  = 2 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
@@ -165,7 +178,7 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
                                     device=self.cfg.device)
             u_samples = u_mean.unsqueeze(0) + u_std.unsqueeze(0) * u_noise  # [N, d_u]
 
-            sequence = self.model.decode_sequence(u_samples, z_dec)
+            sequence = self.model.decode_sequence(u_samples, cond_dec)
             value    = self.estimate_value(z, sequence, horizon).squeeze(1)  # [N]
 
             elite_idxs    = torch.topk(value, self.cfg.latent_num_elites, dim=0).indices
@@ -181,8 +194,9 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
         latent_action = dist.rsample() if sample_final_action else u_mean
         latent_action = latent_action.unsqueeze(0)
 
-        log_probs = dist.log_prob(latent_action).squeeze_(0).mean(dim=0)
-        sequence  = self.model.decode_sequence(latent_action, z_target)
-        action    = sequence[0, :].squeeze_(0)
+        log_probs  = dist.log_prob(latent_action).squeeze_(0).mean(dim=0)
+        cond_final = obs if use_raw_obs else self.model_target.h(obs)
+        sequence   = self.model.decode_sequence(latent_action, cond_final)
+        action     = sequence[0, :].squeeze_(0)
 
     return action, u_mean, u_std, latent_action, log_probs

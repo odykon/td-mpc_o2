@@ -33,11 +33,12 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     """
     self.action_dec_optim.zero_grad()
 
+    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
     z                 = self.model.h(obs).detach()
-    z_dec             = self.model_target.h(obs).detach()
+    cond_dec          = obs if use_raw_obs else self.model_target.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
     u_norm            = u_mean.norm(dim=-1).mean().item()
-    sequence, pretanh = self.model.decode_sequence(u_mean, z_dec, return_pretanh=True)
+    sequence, pretanh = self.model.decode_sequence(u_mean, cond_dec, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()
 
     value = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
@@ -45,13 +46,17 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
 
     per_sample_cost = -value
     if weights is not None:
-        cost = (per_sample_cost * weights).mean()
+        value_cost = (per_sample_cost * weights).mean()
     else:
-        cost = per_sample_cost.mean()
+        value_cost = per_sample_cost.mean()
 
-    diversity_coeff = getattr(self.cfg, 'diversity_coeff', 0.0)
-    if log_det_loss is not None and diversity_coeff > 0:
-        cost = cost + diversity_coeff * log_det_loss
+    if hasattr(self, 'log_alpha_diversity'):
+        alpha = self.log_alpha_diversity.exp().item()
+    else:
+        alpha = getattr(self.cfg, 'diversity_coeff', 0.0)
+
+    diversity_cost = alpha * log_det_loss if (log_det_loss is not None and alpha > 0) else 0.0
+    cost = value_cost + diversity_cost
 
     cost.backward()
     grad_norm = torch.sqrt(sum(
@@ -63,8 +68,18 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
         utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=dec_grad_clip)
     self.action_dec_optim.step()
 
+    if log_det_loss is not None and hasattr(self, 'log_alpha_diversity'):
+        alpha_loss = -(self.log_alpha_diversity * (log_det_loss.detach() + self.log_det_target))
+        self.alpha_diversity_optim.zero_grad()
+        alpha_loss.backward()
+        self.alpha_diversity_optim.step()
+
+    diversity_cost_val = diversity_cost.item() if hasattr(diversity_cost, 'item') else float(diversity_cost)
     return {
         'decoder_loss':      cost.item(),
+        'value_cost':        value_cost.item(),
+        'diversity_cost':    diversity_cost_val,
+        'diversity_alpha':   alpha,
         'decoder_grad_norm': grad_norm.item(),
         'value_mean':        value.mean().item(),
         'saturation':        saturation,

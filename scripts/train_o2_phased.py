@@ -69,18 +69,19 @@ PHASED_DEFAULTS = {
 
     # Update cadence
     'told_updates':     500,   # TOLD updates per episode (always, after seed)
-    'decoder_updates':  100,   # decoder updates per episode (warmup + o2)
+    'decoder_updates':  80,   # decoder updates per episode (warmup + o2)
 
     # O2 architecture
     'latent_action_dim':  128,
     'decoder_init':       False,
     'use_latent_state':   True,
+    'use_raw_obs':        True,
     'dcem_batch_size':    64,
     'latent_num_samples': 32,
     'latent_num_elites':  8,
     'lml_temperature':    1,
     'use_is_weights':     True,
-    'dec_grad_clip_norm': 10.0,
+    'dec_grad_clip_norm': 1,
     'lambda_gae':         0.5,
     'use_wandb':          True,
 
@@ -125,6 +126,7 @@ def train(cfg):
             entity=cfg.wandb_entity,
             group=cfg.task,
             name=f"{cfg.exp_name}__seed{cfg.seed}",
+            notes=cfg.get('wandb_notes', None),
             config=OmegaConf.to_container(cfg, resolve=True),
         )
 
@@ -277,7 +279,7 @@ def train(cfg):
 
 def load_cfg() -> OmegaConf:
     cfg = parse_cfg(CFG_PATH)
-    cfg = OmegaConf.merge(OmegaConf.create(PHASED_DEFAULTS), cfg)
+    cfg = OmegaConf.merge(cfg, OmegaConf.create(PHASED_DEFAULTS))
 
     custom_path = cfg.get('cfg', None)
     if custom_path:

@@ -1,0 +1,22 @@
+exp_name: o2_diversity_01_no_z
+wandb_notes: "O2 phased training from scratch, latent CEM from step 0, diversity_coeff=0.01, decoder conditioned on u only (no latent state)"
+
+# MuJoCo step thresholds — o2 phase starts immediately at step 0
+mujoco_train_steps:          40000
+mujoco_seed_steps:           4000
+mujoco_decoder_start_steps:  0
+mujoco_latent_start_steps:   0
+
+# Planning
+iterations: 5
+
+# Decoder training
+decoder_updates:    70
+dcem_batch_size:    128
+dec_grad_clip_norm: 1
+
+# Diversity loss
+diversity_coeff: 0.01
+
+# Architecture
+use_latent_state: false
