@@ -166,6 +166,32 @@ GPU runtime must be enabled. `MUJOCO_GL=egl` is set automatically by the scripts
 Both scripts add `REPO_ROOT` and `REPO_ROOT/tdmpc/src` to `sys.path` at startup, so all imports
 (`o2`, `algorithm`, `cfg`, `env`) resolve correctly without manual path setup.
 
+## VS Code Remote SSH (kalymnos)
+
+Connect to kalymnos directly from VS Code for a local-like editing experience.
+
+**One-time setup (local machine):**
+1. Install the **Remote - SSH** extension in VS Code
+2. Add to `~/.ssh/config`:
+   ```
+   Host kalymnos
+       HostName n12mavra.cs.ntua.gr
+       Port 2222
+       User okonias
+   ```
+3. Install the **Claude** extension in VS Code, then connect to kalymnos and install it on the remote too (`Install in SSH: kalymnos`)
+
+**Connect:** `Cmd+Shift+P` → `Remote-SSH: Connect to Host` → `kalymnos`
+
+VS Code installs the server on the remote automatically on first connect. The green `SSH: kalymnos` badge in the bottom-left confirms the connection.
+
+**Note:** VS Code Server installs to `~/.vscode-server/` by default. Since `/` is nearly full, add this to your local VS Code settings (`settings.json`):
+```json
+"remote.SSH.serverInstallPath": {
+    "kalymnos": "/gpu-data3/okonias/.vscode-server"
+}
+```
+
 ## Remote GPU Cluster Setup (kalymnos)
 
 The cluster has no sudo access and the system disk (`/`) is nearly full. All large files must go on `/gpu-data3`.
