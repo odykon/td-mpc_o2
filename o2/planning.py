@@ -92,14 +92,14 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                 seq_c    = seq - seq.mean(dim=2, keepdim=True)
                 cov      = (seq_c.transpose(-1, -2) @ seq_c) / (N - 1)
                 cov      = cov + 1e-6 * torch.eye(A, device=seq.device)
-                log_det_loss = -torch.linalg.slogdet(cov)[1].mean()
+                log_det_loss = -torch.linalg.slogdet(cov)[1].mean(dim=0)  # [B] — per batch element
 
                 with torch.no_grad():
                     action_var     = seq.var(dim=2).mean().item()
                     eigvals        = torch.linalg.eigvalsh(cov).clamp(min=0)
                     p              = eigvals / (eigvals.sum(dim=-1, keepdim=True) + 1e-8)
                     effective_rank = p.mul(-1).mul(torch.log(p + 1e-8)).sum(dim=-1).exp().mean().item()
-                    diversity      = {'action_var': action_var, 'log_det': -log_det_loss.item(), 'effective_rank': effective_rank}
+                    diversity      = {'action_var': action_var, 'log_det': -log_det_loss.mean().item(), 'effective_rank': effective_rank}
 
             value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
 
@@ -125,6 +125,10 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
             u_mean = u_m
             u_std  = u_s
+
+        with torch.no_grad():
+            diversity['u_mean_norm'] = u_mean.norm(dim=-1).mean().item()
+            diversity['u_std_mean']  = u_std.mean().item()
 
         dist  = torch.distributions.Normal(loc=u_mean, scale=u_std)
         latent_action = dist.rsample() if sample_final_action else u_mean

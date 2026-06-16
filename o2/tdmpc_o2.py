@@ -43,7 +43,7 @@ class TDMPC_O2(TDMPC):
         self.model_target._V = deepcopy(self.model._V).to(self.device)
         self.V_optim = torch.optim.Adam(self.model._V.parameters(), lr=cfg.lr)
 
-        self.log_det_target = getattr(cfg, 'log_det_target', -float(cfg.action_dim))
+        self.log_det_target = getattr(cfg, 'log_det_target', -2.0 * float(cfg.action_dim))
         init_coeff = max(getattr(cfg, 'diversity_coeff', 0.01), 1e-8)
         self.log_alpha_diversity = torch.nn.Parameter(
             torch.tensor([math.log(init_coeff)], device=self.device)
@@ -55,7 +55,7 @@ class TDMPC_O2(TDMPC):
             model.track_TOLD_grad = types.MethodType(track_TOLD_grad, model)
             model.track_O2_grad           = types.MethodType(track_O2_grad, model)
 
-    def estimate_value_with_grad(self, z, actions, horizon, target=Fßßßßalse):
+    def estimate_value_with_grad(self, z, actions, horizon, target=False):
         """estimate_value without @torch.no_grad() — needed for gradient flow in DCEM."""
         m = self.model_target if target else self.model
         G, discount = 0, 1
