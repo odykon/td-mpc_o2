@@ -22,6 +22,7 @@ import torch
 
 import algorithm.helper as h
 from lml import LML
+from o2.gmm_diversity import _fit_gmm
 
 
 
@@ -87,22 +88,18 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
             # Action diversity from last CEM iteration
             if i == self.cfg.iterations - 1:
-                N, H, A  = self.cfg.latent_num_samples, sequence.shape[0], sequence.shape[-1]
-                seq      = sequence.view(H, B, N, A)
-                seq_c    = seq - seq.mean(dim=2, keepdim=True)
-                cov      = (seq_c.transpose(-1, -2) @ seq_c) / (N - 1)
-                cov      = cov + 1e-6 * torch.eye(A, device=seq.device)
-                log_det_loss = -torch.linalg.slogdet(cov)[1].mean(dim=0)  # [B] — per batch element
+                N, H, A = self.cfg.latent_num_samples, sequence.shape[0], sequence.shape[-1]
+                seq     = sequence.view(H, B, N, A)
 
                 with torch.no_grad():
-                    action_var     = seq.var(dim=2).mean().item()
-                    eigvals        = torch.linalg.eigvalsh(cov).clamp(min=0)
-                    p              = eigvals / (eigvals.sum(dim=-1, keepdim=True) + 1e-8)
-                    effective_rank = p.mul(-1).mul(torch.log(p + 1e-8)).sum(dim=-1).exp().mean().item()
-                    diversity      = {'action_var': action_var, 'log_det': -log_det_loss.mean().item(), 'effective_rank': effective_rank}
+                    action_var = seq.var(dim=2).mean().item()
+
+                gmm_K       = getattr(self.cfg, 'gmm_K', 2)
+                gmm_n_iters = getattr(self.cfg, 'gmm_n_iters', 5)
+                log_det_loss, gmm_metrics = _fit_gmm(seq[0:1], K=gmm_K, n_iters=gmm_n_iters)
+                diversity = {'action_var': action_var, **gmm_metrics}
 
             value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
-
             mu     = value.mean(dim=1, keepdim=True).detach()
             sigma  = value.std(dim=1, keepdim=True).detach()
             scores = LML(N=self.cfg.latent_num_elites, verbose=0, eps=1e-4)(

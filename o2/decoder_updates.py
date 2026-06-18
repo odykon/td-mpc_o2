@@ -49,16 +49,14 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     else:
         alpha = getattr(self.cfg, 'diversity_coeff', 0.0)
 
-    # Per-element cost matching SAC: (−value + α * diversity) per batch element
-    diversity_per_elem = alpha * log_det_loss if (log_det_loss is not None and alpha > 0) else 0.0
-    per_sample_cost = -value #+ diversity_per_elem      CHANGE THIS JUST FOR DEBUGGING
+    diversity_cost = alpha * log_det_loss if (log_det_loss is not None and alpha > 0) else 0.0
+    value_cost     = (-value).mean()
+    per_sample_cost = -value
     if weights is not None:
         cost = (per_sample_cost * weights).mean()
     else:
         cost = per_sample_cost.mean()
-
-    value_cost       = (-value).mean()
-    diversity_cost   = diversity_per_elem.mean() if hasattr(diversity_per_elem, 'mean') else float(diversity_per_elem)
+    cost = cost + (diversity_cost if hasattr(diversity_cost, 'backward') else 0.0)
 
     cost.backward()
     grad_norm = torch.sqrt(sum(
@@ -71,7 +69,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     self.action_dec_optim.step()
 
     if log_det_loss is not None and hasattr(self, 'log_alpha_diversity'):
-        alpha_loss = -(self.log_alpha_diversity * (log_det_loss.detach() + self.log_det_target)).mean()
+        alpha_loss = -(self.log_alpha_diversity * (log_det_loss.detach() + self.log_det_target))
         self.alpha_diversity_optim.zero_grad()
         alpha_loss.backward()
         self.alpha_diversity_optim.step()
