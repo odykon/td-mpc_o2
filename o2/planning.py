@@ -100,11 +100,14 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                 diversity = {'action_var': action_var, **gmm_metrics}
 
             value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
+
             mu     = value.mean(dim=1, keepdim=True).detach()
             sigma  = value.std(dim=1, keepdim=True).detach()
+
             scores = LML(N=self.cfg.latent_num_elites, verbose=0, eps=1e-4)(
                 (value - mu) / (sigma + 1e-5) * self.cfg.lml_temperature
             )
+
             scores = scores / scores.sum(dim=1, keepdim=True)
             elite_weights = scores.unsqueeze(2)
 

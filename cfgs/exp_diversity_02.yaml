@@ -1,4 +1,4 @@
-exp_name: o2_diversityGMM_02
+exp_name: o2_diversityGMM_03
 wandb_notes: "O2 phased training from scratch, latent CEM from step 0, GMM entropy with learnable entropy coefficient"
 
 # MuJoCo step thresholds — o2 phase starts immediately at step 0
@@ -11,8 +11,8 @@ mujoco_latent_start_steps:   0
 decoder_updates:    80
 dcem_batch_size:    64
 dec_grad_clip_norm: 1
-use_latent_state:   False
+use_latent_state:   False 
 use_raw_obs:       True
 
-diversity_coeff':   0.01
-log_det_target' :   -6
+diversity_coeff:   0.01
+log_det_target :   -14
