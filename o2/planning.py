@@ -35,7 +35,11 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     iteration during backward(). The grad_tracker list is populated only
     after cost.backward() is called by the caller.
 
-    Also computes GMM diversity metrics from the last CEM iteration.
+    Also computes GMM diversity metrics from the last CEM iteration. The
+    diversity loss is computed from a re-decoded sequence using a detached
+    copy of that iteration's latent samples, so its gradient updates only
+    the decoder weights through that single decode step — it does not
+    propagate back into u_mean/u_std or earlier CEM iterations.
 
     Args:
         obs:                 [B, obs_dim] or raw numpy observation.
@@ -86,10 +90,14 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
             sequence = self.model.decode_sequence(u_flat, cond_dec)
 
-            # Action diversity from last CEM iteration
+            # Action diversity from last CEM iteration. Re-decode from a detached
+            # u_flat so the diversity loss's gradient reaches only this decode
+            # step (the decoder weights) and not the upstream CEM unroll (u_mean/u_std
+            # of this or earlier iterations).
             if i == self.cfg.iterations - 1:
-                N, H, A = self.cfg.latent_num_samples, sequence.shape[0], sequence.shape[-1]
-                seq     = sequence.view(H, B, N, A)
+                diversity_sequence = self.model.decode_sequence(u_flat.detach(), cond_dec)
+                N, H, A = self.cfg.latent_num_samples, diversity_sequence.shape[0], diversity_sequence.shape[-1]
+                seq     = diversity_sequence.view(H, B, N, A)
 
                 with torch.no_grad():
                     action_var = seq.var(dim=2).mean().item()
