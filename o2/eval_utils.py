@@ -16,7 +16,7 @@ def make_save_dir_path(cfg, base_dir="results", timezone="Europe/Athens"):
     save_dir = os.path.join(base_dir, f"{exp_name}_{timestamp}")
     return save_dir
 
-def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mode="none", use_latent=True):
+def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mode="none", use_latent=True, sample_final_action=False):
     """
     Evaluate the agent and optionally save videos.
 
@@ -29,6 +29,9 @@ def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mod
         save_dir:    Directory where videos are saved (optional)
         video_mode:  "first", "best_worst", or "none"
         use_latent:  If True, plan with CEM_in_latent; if False, use standard agent.plan()
+        sample_final_action: If True (only affects use_latent=True), sample the final
+                     latent action from the CEM search distribution instead of using
+                     its mean. Passed through to CEM_in_latent.
 
     Returns:
         eval_metrics (dict): Evaluation statistics and episode rewards.
@@ -61,7 +64,7 @@ def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mod
             with torch.no_grad():
                 compute_time_start = time.time()
                 if use_latent:
-                    action, *_ = agent.CEM_in_latent(obs, step=step_in_ep)
+                    action, *_ = agent.CEM_in_latent(obs, step=step_in_ep, sample_final_action=sample_final_action)
                 else:
                     action = agent.plan(obs, eval_mode=True, step=step_in_ep, t0=(step_in_ep == 0))
                 compute_time_end = time.time()

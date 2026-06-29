@@ -1,0 +1,17 @@
+exp_name: o2_diversityGMM_monte_carlo_05
+wandb_notes: "Tried a larger initial alpha for the entropy, target is at -action_dim. GMM is from samples want to see if it stabilizes"
+
+# MuJoCo step thresholds — o2 phase starts immediately at step 0
+mujoco_train_steps:          100000
+mujoco_seed_steps:           4000
+mujoco_decoder_start_steps:  0
+mujoco_latent_start_steps:   0
+
+# Decoder training
+decoder_updates:    80
+dcem_batch_size:    128
+dec_grad_clip_norm: 1
+use_latent_state:   False 
+use_raw_obs:       True
+
+diversity_coeff:   0.1

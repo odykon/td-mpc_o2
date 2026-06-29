@@ -79,7 +79,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
         u_mean = torch.zeros(B, self.cfg.latent_action_dim,
                              device=self.cfg.device, requires_grad=True)
-        u_std  = 2 * torch.ones(B, self.cfg.latent_action_dim,
+        u_std  = 1 * torch.ones(B, self.cfg.latent_action_dim,
                                 device=self.cfg.device, requires_grad=True)
 
         for i in range(self.cfg.iterations):
@@ -183,7 +183,7 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
             cond_dec = z_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
 
         u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device)
-        u_std  = 2 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
+        u_std  = 1 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
 
         for i in range(self.cfg.iterations):
             u_noise   = torch.randn(self.cfg.latent_num_samples, self.cfg.latent_action_dim,
