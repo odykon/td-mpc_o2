@@ -43,12 +43,12 @@ class TDMPC_O2(TDMPC):
         self.model_target._V = deepcopy(self.model._V).to(self.device)
         self.V_optim = torch.optim.Adam(self.model._V.parameters(), lr=cfg.lr)
 
-        self.log_det_target = getattr(cfg, 'log_det_target', -2.0 * float(cfg.action_dim))
+        self.log_det_target = getattr(cfg, 'log_det_target', -3.0 * float(cfg.action_dim))
         init_coeff = max(getattr(cfg, 'diversity_coeff', 0.01), 1e-8)
         self.log_alpha_diversity = torch.nn.Parameter(
             torch.tensor([math.log(init_coeff)], device=self.device)
         )
-        self.alpha_diversity_optim = torch.optim.Adam([self.log_alpha_diversity], lr=3e-4)
+        self.alpha_diversity_optim = torch.optim.Adam([self.log_alpha_diversity], lr=1e-3)
 
         for model in [self.model, self.model_target]:
             model.decode_sequence = types.MethodType(decode_sequence, model)

@@ -9,7 +9,7 @@ mujoco_latent_start_steps:   0
 
 # Decoder training
 decoder_updates:    80
-dcem_batch_size:    64
+dcem_batch_size:    128
 dec_grad_clip_norm: 1
 use_latent_state:   False
 use_raw_obs:       True
