@@ -9,7 +9,11 @@ Planning methods for latent action space control.
     CEM_in_latent — Vanilla CEM with hard top-k elite selection.
                     Non-differentiable. Used for environment interaction.
 
-Both functions take self as their first argument where self is a
+    CEM_in_latent_open_loop — Same as CEM_in_latent, but also returns the full
+                    decoded action sequence and scheduled horizon, for callers
+                    that execute the whole plan open-loop before replanning.
+
+All functions take self as their first argument where self is a
 TDMPC_O2 instance, giving access to self.model, self.cfg,
 self.device, and self.estimate_value.
 
@@ -212,3 +216,74 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
         action     = sequence[0, :].squeeze_(0)
 
     return action, u_mean, u_std, latent_action, log_probs
+
+
+def CEM_in_latent_open_loop(self, obs, step=None, sample_final_action=False):
+    """
+    Same CEM logic as CEM_in_latent, but also returns the full decoded action
+    sequence and the scheduled horizon, so the caller can execute the whole
+    plan open-loop (a:0 ... a:H-1) before replanning instead of replanning
+    every env step.
+
+    Args:
+        obs:                 Raw observation.
+        step:                Current training step (for horizon schedule).
+        sample_final_action: Sample from final distribution instead of mean.
+
+    Returns:
+        action, u_mean, u_std, latent_action, log_probs, sequence, horizon
+
+        sequence: [cfg.horizon, B, action_dim] full decoded action sequence
+                  (action is just sequence[0]).
+        horizon:  scheduled planning horizon used for value estimation this
+                  call (<= cfg.horizon) — only sequence[:horizon] was actually
+                  scored by CEM; steps beyond that are decoded but unscored.
+    """
+    obs = obs if isinstance(obs, torch.Tensor) else \
+          torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+    B = obs.shape[0]
+    horizon = int(min(self.cfg.horizon, h.linear_schedule(self.cfg.horizon_schedule, step)))
+
+    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
+    self.std = h.linear_schedule(self.cfg.std_schedule, step)
+
+    with torch.no_grad():
+        z     = self.model.h(obs)
+        z     = z.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+
+        if use_raw_obs:
+            cond_dec = obs.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+        else:
+            z_target = self.model_target.h(obs)
+            cond_dec = z_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
+
+        u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device)
+        u_std  = 1 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
+
+        for i in range(self.cfg.iterations):
+            u_noise   = torch.randn(self.cfg.latent_num_samples, self.cfg.latent_action_dim,
+                                    device=self.cfg.device)
+            u_samples = u_mean.unsqueeze(0) + u_std.unsqueeze(0) * u_noise  # [N, d_u]
+
+            sequence = self.model.decode_sequence(u_samples, cond_dec)
+            value    = self.estimate_value(z, sequence, horizon).squeeze(1)  # [N]
+
+            elite_idxs    = torch.topk(value, self.cfg.latent_num_elites, dim=0).indices
+            elite_samples = u_samples[elite_idxs]
+
+            u_m = elite_samples.mean(dim=0)
+            u_s = elite_samples.std(dim=0, unbiased=False).clamp(self.std, 2)
+
+            u_mean = self.cfg.momentum * u_mean + (1 - self.cfg.momentum) * u_m
+            u_std  = u_s
+
+        dist  = torch.distributions.Normal(loc=u_mean, scale=u_std)
+        latent_action = dist.rsample() if sample_final_action else u_mean
+        latent_action = latent_action.unsqueeze(0)
+
+        log_probs  = dist.log_prob(latent_action).squeeze_(0).mean(dim=0)
+        cond_final = obs if use_raw_obs else self.model_target.h(obs)
+        sequence   = self.model.decode_sequence(latent_action, cond_final)
+        action     = sequence[0, :].squeeze_(0)
+
+    return action, u_mean, u_std, latent_action, log_probs, sequence, horizon

@@ -7,6 +7,9 @@ Adds to TDMPC:
     - Action decoder:  maps latent actions u → action sequences
     - DCEM:            differentiable CEM planner (for decoder training)
     - CEM_in_latent:   standard CEM in latent space (for rollouts)
+    - CEM_in_latent_open_loop: CEM_in_latent variant that also returns the full
+                       decoded sequence + scheduled horizon, for open-loop
+                       (plan once, execute a:0..a:H-1, then replan) rollouts
     - Decoder update:  off-policy DDPG with GAE value targets
 """
 
@@ -19,7 +22,7 @@ from algorithm.tdmpc import TDMPC
 from o2.action_decoder import (build_action_decoder, decode_sequence,
                                 track_TOLD_grad, track_O2_grad,
                                 build_value_network)
-from o2.planning import DCEM, CEM_in_latent
+from o2.planning import DCEM, CEM_in_latent, CEM_in_latent_open_loop
 from o2.decoder_updates import update_decoder_DDPG, PG_withV, action_entropy_loss, V_net_update
 
 
@@ -100,6 +103,9 @@ class TDMPC_O2(TDMPC):
 
     def CEM_in_latent(self, *args, **kwargs):
         return CEM_in_latent(self, *args, **kwargs)
+
+    def CEM_in_latent_open_loop(self, *args, **kwargs):
+        return CEM_in_latent_open_loop(self, *args, **kwargs)
 
     def update_decoder_DDPG(self, *args, **kwargs):
         return update_decoder_DDPG(self, *args, **kwargs)
