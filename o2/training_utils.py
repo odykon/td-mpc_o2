@@ -15,18 +15,33 @@ import numpy as np
 from algorithm.helper import linear_schedule
 
 
-def sample_decoder_batch(buffer, batch_size, use_is_weights=False):
+def sample_decoder_batch(buffer, batch_size, use_is_weights=False, uniform=False):
     """
     Sample one decoder-update batch at a specific batch size without permanently
     mutating the shared cfg (buffer.cfg IS agent.cfg — same object).
 
+    If uniform=True, samples uniformly over the buffer instead of through
+    TOLD's prioritized replay: the decoder update only reads `obs` and rolls
+    forward through the learned dynamics model (estimate_value_GAE), so it has
+    no dependency on PER's TD-error-driven priorities. use_is_weights is
+    ignored in this case (uniform sampling has no bias to correct). TOLD's own
+    updates (update_tdmpc) are unaffected either way — they call
+    buffer.sample() directly.
+
+    Toggle via cfg.decoder_uniform_sampling (see update_decoder below).
+
     Returns:
         obs:     [batch_size, obs_dim]
-        weights: [batch_size] IS weights, or None if use_is_weights=False
+        weights: [batch_size] IS weights, or None if uniform or use_is_weights=False
     """
     old = buffer.cfg.batch_size
     buffer.cfg.batch_size = batch_size
-    if use_is_weights:
+    if uniform:
+        total   = buffer.idx if not buffer._full else buffer.capacity
+        idxs    = torch.randint(0, total, (batch_size,), device=buffer.device)
+        obs     = buffer._get_obs(buffer._obs, idxs)
+        weights = None
+    elif use_is_weights:
         obs, _, _, _, _, weights = buffer.sample()
     else:
         obs     = buffer.sample()[0]
@@ -99,12 +114,13 @@ def update_decoder(agent, buffer, cfg, step):
     horizon = int(linear_schedule(cfg.horizon_schedule, step))
 
     use_is_weights    = getattr(agent.cfg, 'use_is_weights', False)
+    uniform_sampling  = getattr(agent.cfg, 'decoder_uniform_sampling', False)
     accum             = {}
     grad_norm_max     = 0.0
     last_grad_tracker = []
     for _ in range(agent.cfg.decoder_updates):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
-                                            use_is_weights=use_is_weights)
+                                            use_is_weights=use_is_weights, uniform=uniform_sampling)
         _, u_mean, u_std, _, _, grad_tracker, diversity, log_det_loss = agent.DCEM(obs, step=step)
         metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, log_det_loss=log_det_loss, u_std=u_std)
         metrics.update(diversity)

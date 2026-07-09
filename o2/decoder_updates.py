@@ -40,10 +40,10 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
 
     # Reparameterized sample from the DCEM distribution: gradients on the
     # decoder loss flow back through both u_mean and u_std, not just u_mean.
-    if u_std is not None:
-        u = u_mean + u_std * torch.randn_like(u_mean)
-    else:
-        u = u_mean
+    #if u_std is not None:
+    #    u = u_mean + u_std * torch.randn_like(u_mean)
+    #else:
+    u = u_mean
     u_norm            = u.norm(dim=-1).mean().item()
     sequence, pretanh = self.model.decode_sequence(u, cond_dec, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()

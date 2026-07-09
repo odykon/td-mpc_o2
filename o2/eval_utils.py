@@ -64,9 +64,9 @@ def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mod
             with torch.no_grad():
                 compute_time_start = time.time()
                 if use_latent:
-                    action, *_ = agent.CEM_in_latent(obs, step=step_in_ep, sample_final_action=sample_final_action)
+                    action, *_ = agent.CEM_in_latent(obs, step=step, sample_final_action=sample_final_action)
                 else:
-                    action = agent.plan(obs, eval_mode=True, step=step_in_ep, t0=(step_in_ep == 0))
+                    action = agent.plan(obs, eval_mode=True, step=step, t0=(step_in_ep == 0))
                 compute_time_end = time.time()
             obs, reward, done, _ = env.step(action.cpu().numpy())
             total_reward += reward

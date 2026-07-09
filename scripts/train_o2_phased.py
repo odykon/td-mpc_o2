@@ -81,6 +81,7 @@ PHASED_DEFAULTS = {
     'latent_num_elites':  8,
     'lml_temperature':    1,
     'use_is_weights':     True,
+    'decoder_uniform_sampling': True,
     'dec_grad_clip_norm': 1,
     'lambda_gae':         0.5,
     'use_wandb':          True,

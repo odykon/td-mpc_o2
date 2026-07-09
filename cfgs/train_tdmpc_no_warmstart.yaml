@@ -1,0 +1,20 @@
+# ── Task (set via CLI: task=walker-walk seed=1) ───────────────────────────────
+
+exp_name: tdmpc_no_warmstart
+
+# ── Training ──────────────────────────────────────────────────────────────────
+# Set in terms of raw MuJoCo interactions — divided by action_repeat automatically
+# in train_tdmpc_no_warmstart.py's load_cfg(). Mirrors PHASED_DEFAULTS in
+# train_o2_phased.py so this baseline's step budget matches the O2 phased runs.
+mujoco_train_steps:              40000
+mujoco_seed_steps:                4000
+
+# Schedule endpoints in MuJoCo steps (also divided by action_repeat in load_cfg).
+# std decays 0.5 -> min_std; horizon grows 1 -> horizon, over the whole run.
+mujoco_std_schedule_steps:       40000
+mujoco_horizon_schedule_steps:   40000
+
+# ── Evaluation & Saving ───────────────────────────────────────────────────────
+eval_freq: 20000
+eval_episodes: 0
+save_model: false

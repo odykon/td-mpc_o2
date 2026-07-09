@@ -1,17 +1,13 @@
 """
-TD-MPC training script.
-Trains a standard TD-MPC agent on a DMControl task using CEM planning
-and the standard TOLD model update.
+TD-MPC training script — CEM mean warm-starting disabled.
+Identical to train_tdmpc.py, except every call to agent.plan() passes t0=True,
+so tdmpc.py's `if not t0 and hasattr(self, '_prev_mean')` branch never fires and
+the CEM mean is re-initialized to zero every step instead of carrying over the
+previous step's converged mean.
 
 Usage (from repo root):
-    python scripts/train_tdmpc.py task=walker-walk seed=1
-    python scripts/train_tdmpc.py task=cheetah-run exp_name=myrun eval_freq=10000
-
-Kaggle setup:
-    !git clone <your-repo-url>
-    %cd <repo-name>
-    !pip install dm-control omegaconf
-    !python scripts/train_tdmpc.py task=walker-walk
+    python scripts/train_tdmpc_no_warmstart.py task=walker-walk seed=1
+    python scripts/train_tdmpc_no_warmstart.py task=cheetah-run seed=1
 
 Logs are saved to logs/<task>/<modality>/<exp_name>/<seed>/
   - train.csv : per-episode training metrics
@@ -50,6 +46,15 @@ torch.backends.cudnn.benchmark = True
 CFG_PATH = REPO_ROOT / 'tdmpc' / 'cfgs'
 LOG_ROOT = REPO_ROOT / 'logs'
 
+# Mirrors PHASED_DEFAULTS' step budget (train_o2_phased.py) so this baseline
+# is directly comparable: same total MuJoCo steps and same horizon/std decay length.
+NO_WARMSTART_DEFAULTS = {
+    'mujoco_train_steps':           40000,
+    'mujoco_seed_steps':            4000,
+    'mujoco_std_schedule_steps':    40000,
+    'mujoco_horizon_schedule_steps': 40000,
+    'exp_name':                     'tdmpc_no_warmstart',
+}
 
 
 @torch.no_grad()
@@ -59,7 +64,7 @@ def evaluate(env, agent, num_episodes: int, step: int) -> float:
     for _ in range(num_episodes):
         obs, done, total, t = env.reset(), False, 0.0, 0
         while not done:
-            action = agent.plan(obs, eval_mode=True, step=step, t0=(t == 0))
+            action = agent.plan(obs, eval_mode=True, step=step, t0=True)
             obs, reward, done, _ = env.step(action.cpu().numpy())
             total += reward
             t += 1
@@ -68,7 +73,7 @@ def evaluate(env, agent, num_episodes: int, step: int) -> float:
 
 
 def train(cfg):
-    """Main training loop for TD-MPC."""
+    """Main training loop for TD-MPC, without CEM mean warm-starting."""
     assert torch.cuda.is_available(), 'CUDA is required. Use a GPU runtime.'
     set_seed(cfg.seed)
 
@@ -88,6 +93,7 @@ def train(cfg):
     print(f'Action dim:  {cfg.action_dim}')
     print(f'Seed:        {cfg.seed}')
     print(f'Log dir:     {work_dir}')
+    print(f'Warm-start:  disabled (t0=True every step)')
     print('=' * 60 + '\n')
 
     episode_idx = 0
@@ -99,7 +105,7 @@ def train(cfg):
         obs = env.reset()
         episode = Episode(cfg, obs)
         while not episode.done:
-            action = agent.plan(obs, step=step, t0=episode.first)
+            action = agent.plan(obs, step=step, t0=True)
             obs, reward, done, _ = env.step(action.cpu().numpy())
             episode += (obs, action, reward, done)
         assert len(episode) == cfg.episode_length
@@ -160,14 +166,14 @@ def make_cfg(task: str, **overrides) -> OmegaConf:
     Build a config programmatically for use in notebooks.
 
     Example:
-        from scripts.train_tdmpc import make_cfg
+        from scripts.train_tdmpc_no_warmstart import make_cfg
         cfg = make_cfg('walker-walk', seed=1, exp_name='my_run')
         cfg.lr = 3e-4
         OmegaConf.save(cfg, 'my_cfg.yaml')
-        # then: !python scripts/train_tdmpc.py cfg=my_cfg.yaml
+        # then: !python scripts/train_tdmpc_no_warmstart.py cfg=my_cfg.yaml
     """
     old_argv = sys.argv
-    sys.argv = ['train_tdmpc', f'task={task}'] + [f'{k}={v}' for k, v in overrides.items()]
+    sys.argv = ['train_tdmpc_no_warmstart', f'task={task}'] + [f'{k}={v}' for k, v in overrides.items()]
     try:
         cfg = parse_cfg(CFG_PATH)
     finally:
@@ -177,35 +183,49 @@ def make_cfg(task: str, **overrides) -> OmegaConf:
 
 def load_cfg() -> OmegaConf:
     """
-    Load config with optional custom YAML file.
+    Load config with NO_WARMSTART_DEFAULTS and an optional custom YAML file.
 
     Priority (lowest to highest):
       1. tdmpc/cfgs/default.yaml
       2. tdmpc/cfgs/tasks/<domain>.yaml
-      3. Custom YAML passed as cfg=<path>
-      4. Remaining CLI args (e.g. seed=1 exp_name=test)
+      3. NO_WARMSTART_DEFAULTS (mirrored in cfgs/train_tdmpc_no_warmstart.yaml)
+      4. Custom YAML passed as cfg=<path>
+      5. Remaining CLI args (e.g. seed=1 exp_name=test)
+
+    train_steps/seed_steps and horizon_schedule/std_schedule are all rebuilt
+    from mujoco_* (raw MuJoCo step) counts divided by action_repeat — same
+    approach as train_o2_phased.py's load_cfg — so this baseline's step budget
+    and schedule length line up with the phased O2 runs.
 
     Example:
-      python scripts/train_tdmpc.py cfg=my_cfg.yaml
-      python scripts/train_tdmpc.py cfg=my_cfg.yaml seed=42
+      python scripts/train_tdmpc_no_warmstart.py cfg=cfgs/train_tdmpc_no_warmstart.yaml task=walker-walk seed=1
     """
     cfg = parse_cfg(CFG_PATH)
+    cfg = OmegaConf.merge(cfg, OmegaConf.create(NO_WARMSTART_DEFAULTS))
+
     custom_path = cfg.get('cfg', None)
     if custom_path:
         custom = OmegaConf.load(custom_path)
         cli = OmegaConf.from_cli()
         cli_overrides = OmegaConf.create({k: v for k, v in cli.items() if k != 'cfg'})
         cfg = OmegaConf.merge(cfg, custom, cli_overrides)
-        for k, v in cfg.items():
-            if isinstance(v, str):
-                match = re.match(r'(\d+)([+\-*/])(\d+)', v)
-                if match:
-                    result = eval(match.group(1) + match.group(2) + match.group(3))
-                    cfg[k] = int(result) if isinstance(result, float) and result.is_integer() else result
-        if cfg.get('mujoco_seed_steps', None) is not None:
-            cfg.seed_steps = cfg.mujoco_seed_steps // cfg.action_repeat
-        if cfg.get('mujoco_train_steps', None) is not None:
-            cfg.train_steps = cfg.mujoco_train_steps // cfg.action_repeat
+
+    for k, v in cfg.items():
+        if isinstance(v, str):
+            match = re.match(r'^(\d+)([+\-*/])(\d+)$', v)
+            if match:
+                result = eval(match.group(1) + match.group(2) + match.group(3))
+                cfg[k] = int(result) if isinstance(result, float) and result.is_integer() else result
+
+    ar = cfg.action_repeat
+    cfg.train_steps = int(cfg.mujoco_train_steps) // ar
+    cfg.seed_steps = int(cfg.mujoco_seed_steps) // ar
+
+    std_steps = int(cfg.mujoco_std_schedule_steps) // ar
+    horizon_steps = int(cfg.mujoco_horizon_schedule_steps) // ar
+    cfg.std_schedule = f"linear(0.5, {cfg.min_std}, {std_steps})"
+    cfg.horizon_schedule = f"linear(1, {cfg.horizon}, {horizon_steps})"
+
     return cfg
 
 

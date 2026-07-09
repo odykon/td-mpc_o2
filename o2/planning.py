@@ -104,21 +104,36 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                 seq     = diversity_sequence.view(H, B, N, A)
 
                 with torch.no_grad():
-                    action_var = seq.var(dim=2).mean().item()
+                    action_var   = seq[0].var(dim=1).mean().item()   # first action only: (B,N,A) → var over N
+                    sequence_var = seq.var(dim=2).mean().item()       # whole sequence:    (H,B,N,A) → var over N
 
                 gmm_K       = getattr(self.cfg, 'gmm_K', 2)
                 gmm_n_iters = getattr(self.cfg, 'gmm_n_iters', 5)
                 log_det_loss, gmm_metrics = _fit_gmm(seq[0:1], K=gmm_K, n_iters=gmm_n_iters)
-                diversity = {'action_var': action_var, **gmm_metrics}
+                diversity = {'action_var': action_var, 'sequence_var': sequence_var, **gmm_metrics}
 
             value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
 
-            mu     = value.mean(dim=1, keepdim=True).detach()
-            sigma  = value.std(dim=1, keepdim=True).detach()
+            median = value.median(dim=1, keepdim=True).values.detach()
+            mad    = (value - median).abs().median(dim=1, keepdim=True).values.detach()
 
-            scores = LML(N=self.cfg.latent_num_elites, verbose=0, eps=1e-4)(
-                (value - mu) / (sigma + 1e-5) * self.cfg.lml_temperature
-            )
+            # Straight-through normalization + temperature: LML's forward input
+            # is the full median/MAD-normalized, temperature-scaled value (this
+            # controls selection sharpness), but the backward gradient into
+            # `value` is passed through with coefficient 1 — unscaled by either
+            # lml_temperature or 1/mad. Without this, both would multiply the
+            # backward Jacobian at every one of the `iterations` unrolled steps:
+            # lml_temperature explicitly, and 1/mad implicitly (mad shrinks as
+            # CEM's elites converge across iterations), compounding into
+            # exploding gradients.
+            #
+            # To revert to STE on temperature only (normalization left in the
+            # backward path), restore:
+            normalized = (value - median) / (mad + 1e-5)
+            scaled     = normalized * self.cfg.lml_temperature
+            lml_input  = normalized + (scaled - normalized).detach()
+
+            scores = LML(N=self.cfg.latent_num_elites, verbose=0, eps=1e-4)(lml_input)
 
             scores = scores / scores.sum(dim=1, keepdim=True)
             elite_weights = scores.unsqueeze(2)

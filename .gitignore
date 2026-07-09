@@ -13,3 +13,5 @@ wandb/
 checkpoints/
 download_runs.py
 
+eval_videos/
+output.png
