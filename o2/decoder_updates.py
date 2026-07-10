@@ -8,8 +8,10 @@ import torch
 import torch.nn.utils as utils
 from torch.distributions import MultivariateNormal
 
+from o2.gmm_diversity import _fit_gmm_em, _gmm_log_prob
 
-def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=None, u_std=None):
+
+def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     """
     DDPG-style decoder update using a GAE-weighted sum of n-step TD targets.
 
@@ -20,16 +22,34 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     Config: lambda_gae (default 0.5), gae_horizons (default 5).
     Saturation is monitored but not penalised.
 
+    Also fits a GMM (o2/gmm_diversity.py) here, on fresh samples drawn from
+    the final u_mean/u_std, rather than in DCEM on the last CEM iteration's
+    pre-update samples (see git history for the prior version,
+    o2/planning.py). Sample count is cfg.gmm_num_samples, independent of the
+    CEM population size (cfg.latent_num_samples). u_mean/u_std are detached
+    when building the fit samples (gmm_u) — the fit's final M-step (mu/Sigma)
+    still carries gradient back to decoder weights via that decode call (see
+    o2/gmm_diversity.py for which parts of EM are frozen vs differentiable),
+    but not any further back through u_mean/u_std into DCEM's own unrolled
+    CEM iterations. The reparameterized sample used for the value backward
+    pass (u = u_mean + u_std*noise) is NOT detached — value_cost and the
+    diversity penalty (scored on that same sample against the GMM fit) both
+    keep their existing gradient path through u_mean/u_std back into DCEM,
+    unchanged.
+
     Args:
         obs:     [B, obs_dim] observation batch from the replay buffer.
         u_mean:  [B, latent_action_dim] differentiable latent action mean
                  obtained from DCEM().
         horizon: int planning horizon (used as GAE rollout length).
         weights: optional [B] importance-sampling weights.
+        u_std:   [B, latent_action_dim] final DCEM search-distribution std,
+                 required to sample for the GMM diversity fit.
 
     Returns:
         dict with keys: decoder_loss, decoder_grad_norm, value_mean,
-                        saturation, z_norm, u_norm, hidden_norm
+                        saturation, z_norm, u_norm, hidden_norm, plus the
+                        GMM diversity metrics (gmm_diversity, gmm_pi_balance, ...)
     """
     self.action_dec_optim.zero_grad()
 
@@ -38,15 +58,44 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     cond_dec          = obs if use_raw_obs else self.model_target.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
 
+    # GMM fit — fresh samples from the final (post-DCEM) u_mean/u_std,
+    # detached here so the fit doesn't propagate gradient back through
+    # DCEM's own unrolled CEM iterations (expensive, and not something we
+    # want this loss reshaping). The fit's final M-step still carries
+    # gradient back to decoder weights via the decode_sequence call below —
+    # see o2/gmm_diversity.py for the differentiable-EM caveats and the
+    # revert instructions back to a fully detached/frozen fit.
+    gmm_num_samples = getattr(self.cfg, 'gmm_num_samples', self.cfg.latent_num_samples)
+    gmm_K           = getattr(self.cfg, 'gmm_K', 2)
+    gmm_n_iters     = getattr(self.cfg, 'gmm_n_iters', 5)
+
+    B         = u_mean.shape[0]
+    gmm_noise = torch.randn(B, gmm_num_samples, u_mean.shape[-1], device=u_mean.device)
+    gmm_u     = u_mean.detach().unsqueeze(1) + u_std.detach().unsqueeze(1) * gmm_noise
+    gmm_u_flat = gmm_u.reshape(B * gmm_num_samples, -1)
+    gmm_cond   = cond_dec.unsqueeze(1).repeat(1, gmm_num_samples, 1).reshape(B * gmm_num_samples, -1)
+
+    gmm_sequence = self.model.decode_sequence(gmm_u_flat, gmm_cond)
+    H, A = gmm_sequence.shape[0], gmm_sequence.shape[-1]
+    seq  = gmm_sequence.view(H, B, gmm_num_samples, A)
+    mu_fixed, Sigma_fixed, pi_fixed, gmm_metrics = _fit_gmm_em(seq[0:1], K=gmm_K, n_iters=gmm_n_iters)
+
     # Reparameterized sample from the DCEM distribution: gradients on the
     # decoder loss flow back through both u_mean and u_std, not just u_mean.
-    #if u_std is not None:
-    #    u = u_mean + u_std * torch.randn_like(u_mean)
-    #else:
-    u = u_mean
+    if u_std is not None:
+        u = u_mean + u_std * torch.randn_like(u_mean)
+    else:
+        u = u_mean
     u_norm            = u.norm(dim=-1).mean().item()
     sequence, pretanh = self.model.decode_sequence(u, cond_dec, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()
+
+    # Diversity penalty — score the *value-optimized* sample against the
+    # frozen mixture (first horizon step only, matching what it was fit on),
+    # rather than re-scoring the fresh fit samples themselves.
+    x_eval       = sequence[0:1].unsqueeze(2)  # [1, B, 1, A]
+    log_det_loss = _gmm_log_prob(x_eval, mu_fixed, Sigma_fixed, pi_fixed).squeeze(0).squeeze(-1)  # [B]
+    gmm_metrics['gmm_diversity'] = -log_det_loss.detach().mean().item()
 
     value = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
     lam   = getattr(self.cfg, 'lambda_gae', 0.5)
@@ -59,11 +108,12 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     diversity_cost = alpha * log_det_loss if (log_det_loss is not None and alpha > 0) else 0.0
     value_cost     = (-value).mean()
     per_sample_cost = -value
+    if hasattr(diversity_cost, 'backward'):
+        per_sample_cost = per_sample_cost + diversity_cost
     if weights is not None:
         cost = (per_sample_cost * weights).mean()
     else:
         cost = per_sample_cost.mean()
-    cost = cost + (diversity_cost if hasattr(diversity_cost, 'backward') else 0.0)
 
     cost.backward()
     grad_norm = torch.sqrt(sum(
@@ -76,12 +126,12 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
     self.action_dec_optim.step()
 
     if log_det_loss is not None and hasattr(self, 'log_alpha_diversity'):
-        alpha_loss = -(self.log_alpha_diversity * (log_det_loss.detach() + self.log_det_target))
+        alpha_loss = -(self.log_alpha_diversity * (log_det_loss.detach().mean() + self.log_det_target))
         self.alpha_diversity_optim.zero_grad()
         alpha_loss.backward()
         self.alpha_diversity_optim.step()
 
-    diversity_cost_val = diversity_cost.item() if hasattr(diversity_cost, 'item') else float(diversity_cost)
+    diversity_cost_val = diversity_cost.mean().item() if hasattr(diversity_cost, 'item') else float(diversity_cost)
     return {
         'decoder_loss':      cost.item(),
         'value_cost':        value_cost.item(),
@@ -94,6 +144,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, log_det_loss=N
         'u_norm':            u_norm,
         'hidden_norm':       self.model._action_decoder._hidden_norm,
         'lambda_gae':        lam,
+        **gmm_metrics,
     }
 
 

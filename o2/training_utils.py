@@ -121,8 +121,8 @@ def update_decoder(agent, buffer, cfg, step):
     for _ in range(agent.cfg.decoder_updates):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
                                             use_is_weights=use_is_weights, uniform=uniform_sampling)
-        _, u_mean, u_std, _, _, grad_tracker, diversity, log_det_loss = agent.DCEM(obs, step=step)
-        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, log_det_loss=log_det_loss, u_std=u_std)
+        _, u_mean, u_std, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
+        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, u_std=u_std)
         metrics.update(diversity)
         grad_norm_max = max(grad_norm_max, metrics['decoder_grad_norm'])
         for k, v in metrics.items():
@@ -163,10 +163,10 @@ def update_decoder_pg(agent, episode, step, alpha_v=0.0):
         with torch.no_grad():
             z_t  = agent.model.h(obs)
             z_t1 = agent.model.h(obs_t1)
-        _, u_mean, u_std, _, _, grad_tracker, diversity, log_det_loss = agent.DCEM(obs, step=step)
+        _, u_mean, u_std, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
 
         pg_metrics = agent.PG_withV(z_t, z_t1, u_mean, u_std, reward, latent_action,
-                                    alpha_v, log_det_loss=log_det_loss)
+                                    alpha_v)
         v_loss     = agent.V_net_update(reward, z_t, z_t1)
 
         metrics = {**pg_metrics, 'v_loss': v_loss.item(), **diversity}

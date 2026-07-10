@@ -26,8 +26,6 @@ import torch
 
 import algorithm.helper as h
 from lml import LML
-from o2.gmm_diversity import _fit_gmm
-
 
 
 def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
@@ -39,11 +37,11 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     iteration during backward(). The grad_tracker list is populated only
     after cost.backward() is called by the caller.
 
-    Also computes GMM diversity metrics from the last CEM iteration. The
-    diversity loss is computed from a re-decoded sequence using a detached
-    copy of that iteration's latent samples, so its gradient updates only
-    the decoder weights through that single decode step — it does not
-    propagate back into u_mean/u_std or earlier CEM iterations.
+    Also computes action_var/sequence_var diagnostics from the last CEM
+    iteration's samples. (GMM diversity fitting used to happen here too —
+    it now runs in update_decoder_DDPG, o2/decoder_updates.py, fit on the
+    final u_mean/u_std instead of this iteration's pre-update samples; see
+    git history for the prior version.)
 
     Args:
         obs:                 [B, obs_dim] or raw numpy observation.
@@ -59,8 +57,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         latent_action: [B, latent_action_dim] latent action that was decoded.
         log_probs:     scalar                 log prob of latent_action.
         grad_tracker:  list of (iteration, grad_norm) tuples (populated after backward).
-        diversity:     dict with action_var and GMM metrics.
-        gmm_loss:      differentiable GMM diversity loss.
+        diversity:     dict with action_var/sequence_var diagnostics.
     """
     obs = obs if isinstance(obs, torch.Tensor) else \
           torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -83,7 +80,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
         u_mean = torch.zeros(B, self.cfg.latent_action_dim,
                              device=self.cfg.device, requires_grad=True)
-        u_std  = 1 * torch.ones(B, self.cfg.latent_action_dim,
+        u_std  = 2 * torch.ones(B, self.cfg.latent_action_dim,
                                 device=self.cfg.device, requires_grad=True)
 
         for i in range(self.cfg.iterations):
@@ -107,10 +104,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                     action_var   = seq[0].var(dim=1).mean().item()   # first action only: (B,N,A) → var over N
                     sequence_var = seq.var(dim=2).mean().item()       # whole sequence:    (H,B,N,A) → var over N
 
-                gmm_K       = getattr(self.cfg, 'gmm_K', 2)
-                gmm_n_iters = getattr(self.cfg, 'gmm_n_iters', 5)
-                log_det_loss, gmm_metrics = _fit_gmm(seq[0:1], K=gmm_K, n_iters=gmm_n_iters)
-                diversity = {'action_var': action_var, 'sequence_var': sequence_var, **gmm_metrics}
+                diversity = {'action_var': action_var, 'sequence_var': sequence_var}
 
             value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
 
@@ -165,7 +159,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         sequence = self.model.decode_sequence(latent_action, cond_final)
         action   = sequence[0, :].squeeze_(0)
 
-    return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity, log_det_loss
+    return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity
 
 
 def CEM_in_latent(self, obs, step=None, sample_final_action=False):
@@ -202,7 +196,7 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
             cond_dec = z_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
 
         u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device)
-        u_std  = 1 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
+        u_std  = 2 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
 
         for i in range(self.cfg.iterations):
             u_noise   = torch.randn(self.cfg.latent_num_samples, self.cfg.latent_action_dim,
