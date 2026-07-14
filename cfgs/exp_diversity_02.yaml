@@ -1,11 +1,14 @@
-exp_name: o2_diversityGMM_03
-wandb_notes: "O2 phased training from scratch, latent CEM from step 0, GMM entropy with learnable entropy coefficient"
+exp_name: TDMPC_full_training
+wandb_notes: "TDMPC_full_training"
 
 # MuJoCo step thresholds — o2 phase starts immediately at step 0
 mujoco_train_steps:          80000
 mujoco_seed_steps:           4000
-mujoco_decoder_start_steps:  0
-mujoco_latent_start_steps:   0
+mujoco_decoder_start_steps:  100000
+mujoco_latent_start_steps:   100000
+
+num_samples: 512
+num_elites: 64
 
 # Decoder training
 decoder_updates:    80

@@ -1,6 +1,6 @@
 # ── Task ──────────────────────────────────────────────────────────────────────
 
-exp_name: TDMPC_reduced_num_samples_32
+exp_name: TDMPC_full_samples
 
 # ── Training ──────────────────────────────────────────────────────────────────
 # Set in terms of raw MuJoCo interactions — divided by action_repeat automatically.
@@ -12,8 +12,8 @@ mujoco_seed_steps:           4000
 
 # ── Planning (CEM) ────────────────────────────────────────────────────────────
 iterations: 5
-num_samples: 32
-num_elites: 8
+num_samples: 512
+num_elites: 64
 temperature: 0.5
 momentum: 0.1
 min_std: 0.05
@@ -31,6 +31,7 @@ grad_clip_norm: 10
 reward_coef: 0.5
 value_coef: 0.1
 consistency_coef: 2
+told_updates: 500
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 enc_dim: 256

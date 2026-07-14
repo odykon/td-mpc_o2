@@ -1,5 +1,5 @@
-exp_name: TDMPC_o2_diversity_with_STG_try6
-wandb_notes: "With the straight through gradient trick we can use a higere temperature and get normal gradient scales"
+exp_name: TDMPC_o2_diversity_Kmeans_init_try2
+wandb_notes: "Try of differnt EM init techniques and hyperparamters"
 
 # MuJoCo step thresholds — o2 phase starts immediately at step 0
 mujoco_train_steps:          80000
@@ -8,7 +8,7 @@ mujoco_decoder_start_steps:  0
 mujoco_latent_start_steps:   0
 
 latent_num_samples: 32
-latent_num_elites: 4
+latent_num_elites: 8
 
 # Decoder training
 decoder_updates:    80
@@ -28,3 +28,4 @@ log_det_target:   -4
 gmm_num_samples: 128
 gmm_K: 2
 gmm_n_iters: 5
+gmm_init: 'forgy' # 'kmeans++' (default),

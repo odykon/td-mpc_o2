@@ -67,6 +67,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     grad_tracker = []
 
     use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
+    self.std = h.linear_schedule(self.cfg.std_schedule, step)
 
     with torch.enable_grad():
         z_enc = self.model.h(obs).detach()                                   # [B, z_dim] — CEM rollouts
@@ -107,10 +108,8 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                 diversity = {'action_var': action_var, 'sequence_var': sequence_var}
 
             value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
-
             median = value.median(dim=1, keepdim=True).values.detach()
             mad    = (value - median).abs().median(dim=1, keepdim=True).values.detach()
-
             # Straight-through normalization + temperature: LML's forward input
             # is the full median/MAD-normalized, temperature-scaled value (this
             # controls selection sharpness), but the backward gradient into
@@ -126,9 +125,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
             normalized = (value - median) / (mad + 1e-5)
             scaled     = normalized * self.cfg.lml_temperature
             lml_input  = normalized + (scaled - normalized).detach()
-
             scores = LML(N=self.cfg.latent_num_elites, verbose=0, eps=1e-4)(lml_input)
-
             scores = scores / scores.sum(dim=1, keepdim=True)
             elite_weights = scores.unsqueeze(2)
 
@@ -137,15 +134,17 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                 (elite_weights * (u_samples - u_m.unsqueeze(1)) ** 2).sum(dim=1)
                 / (scores.sum(dim=1, keepdim=True) + 1e-9)
             )
-
+            u_s = u_s.clamp(self.std, 2)
+            
             def make_hook(iteration):
                 def record_grad(grad):
                     grad_tracker.append((iteration, grad.norm().item()))
                 return record_grad
             u_m.register_hook(make_hook(i))
 
-            u_mean = u_m
+            u_mean = self.cfg.momentum * u_mean + (1 - self.cfg.momentum) * u_m
             u_std  = u_s
+            
 
         with torch.no_grad():
             diversity['u_mean_norm'] = u_mean.norm(dim=-1).mean().item()

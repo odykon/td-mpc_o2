@@ -62,7 +62,7 @@ cross-entropy version is uncommitted on top of that original (commit
 import torch
 
 
-def _fit_gmm_em(seq, K=2, n_iters=5):
+def _fit_gmm_em(seq, K=2, n_iters=5, init='kmeans++', kmeans_iters=0):
     """
     Fit a K-component GMM to seq via EM. The E/M loop that converges the
     responsibilities runs under no_grad (stable); the final M-step is then
@@ -74,6 +74,11 @@ def _fit_gmm_em(seq, K=2, n_iters=5):
         seq:     [H, B, N, A] fresh decoded action samples to fit the mixture to.
         K:       number of GMM components.
         n_iters: number of EM iterations.
+        init:    'kmeans++' (default), 'forgy', or 'no_init' — mean
+                 initialisation strategy.
+        kmeans_iters: number of hard-assignment k-means (Lloyd) iterations to
+                 refine `mu` after `init`, before the soft EM loop. 0 (default)
+                 skips this and behaves as before.
 
     Returns:
         mu, Sigma: mixture mean/covariance, [H,B,K,A], [H,B,K,A,A] —
@@ -89,11 +94,68 @@ def _fit_gmm_em(seq, K=2, n_iters=5):
     TWO_PI = torch.tensor(2 * torch.pi, device=dev)
 
     with torch.no_grad():
-        chunk = N // K
-        mu = torch.stack(
-            [seq[:, :, k * chunk:(k + 1) * chunk].mean(dim=2) for k in range(K)],
-            dim=2,
-        )  # [H, B, K, A]
+        h_idx = torch.arange(H, device=dev).view(H, 1).expand(H, B)
+        b_idx = torch.arange(B, device=dev).view(1, B).expand(H, B)
+
+        if init == 'kmeans++':
+            # k-means++ init: seed each mean from a distinct raw sample, like
+            # Forgy, but pick them sequentially with probability proportional
+            # to squared distance from the nearest center already chosen.
+            # This spreads the seeds across distinct modes far more reliably
+            # than picking uniformly at random (Forgy), while staying
+            # probabilistic rather than a deterministic farthest-point pick —
+            # a single outlier sample is upweighted, not guaranteed to be
+            # chosen as a center.
+            idx0 = torch.randint(N, (H, B), device=dev)
+            centers = [seq[h_idx, b_idx, idx0]]  # each [H, B, A]
+
+            min_d2 = (seq - centers[0].unsqueeze(2)).pow(2).sum(-1)  # [H, B, N]
+            for _ in range(K - 1):
+                w = min_d2 / min_d2.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                idx_k = torch.multinomial(w.view(H * B, N), 1).view(H, B)
+                center_k = seq[h_idx, b_idx, idx_k]  # [H, B, A]
+                centers.append(center_k)
+                d2_k = (seq - center_k.unsqueeze(2)).pow(2).sum(-1)  # [H, B, N]
+                min_d2 = torch.minimum(min_d2, d2_k)
+
+            mu = torch.stack(centers, dim=2)  # [H, B, K, A]
+
+        elif init == 'forgy':
+            # Forgy init: seed each mean from a distinct raw sample rather than
+            # the mean of a chunk of samples. seq's sample dim is unordered
+            # i.i.d. noise, so a chunk *mean* is a low-variance estimate of the
+            # same global mean regardless of which chunk — the seeds end up on
+            # top of each other and EM never breaks the symmetry. A raw sample
+            # keeps the full spread, so it has a real chance of landing in a
+            # distinct mode.
+            h_idx_k = h_idx.unsqueeze(-1).expand(H, B, K)
+            b_idx_k = b_idx.unsqueeze(-1).expand(H, B, K)
+            idx = torch.rand(H, B, N, device=dev).argsort(dim=-1)[..., :K]  # distinct per (H,B)
+            mu  = seq[h_idx_k, b_idx_k, idx]  # [H, B, K, A]
+
+        elif init == 'no_init':
+            # No-init baseline, kept for comparison only: split the N samples
+            # into K contiguous chunks and seed each mean from that chunk's
+            # mean. seq's sample dim is unordered i.i.d. noise, so this is
+            # exactly the "mean of a chunk" failure mode described above — the
+            # chunk means are independent noisy estimates of the *same* global
+            # mean (variance shrinking as N/K grows), so the K seeds start
+            # near-identical and EM has no signal to break the symmetry.
+            mu = torch.stack([c.mean(dim=2) for c in torch.chunk(seq, K, dim=2)], dim=2)  # [H, B, K, A]
+
+        else:
+            raise ValueError(f"_fit_gmm_em: unknown init '{init}', expected 'kmeans++', 'forgy', or 'no_init'")
+
+        # Optional hard k-means (Lloyd) warm-start: refine `mu` by nearest-
+        # center Euclidean assignment before handing off to soft EM. Cheap
+        # (no Cholesky/Mahalanobis needed) and sharpens whatever `init` seeded,
+        # so it composes with all three strategies above.
+        for _ in range(kmeans_iters):
+            d2     = (seq.unsqueeze(3) - mu.unsqueeze(2)).pow(2).sum(-1)  # [H, B, N, K]
+            assign = d2.argmin(dim=-1)                                   # [H, B, N]
+            r_hard = torch.nn.functional.one_hot(assign, K).to(seq.dtype)  # [H, B, N, K]
+            N_k    = r_hard.sum(dim=2).clamp(min=1e-8)                   # [H, B, K]
+            mu     = (r_hard.unsqueeze(-1) * seq.unsqueeze(3)).sum(dim=2) / N_k.unsqueeze(-1)
 
         global_mean = seq.mean(dim=2, keepdim=True)
         d0    = seq - global_mean

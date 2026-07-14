@@ -68,6 +68,8 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     gmm_num_samples = getattr(self.cfg, 'gmm_num_samples', self.cfg.latent_num_samples)
     gmm_K           = getattr(self.cfg, 'gmm_K', 2)
     gmm_n_iters     = getattr(self.cfg, 'gmm_n_iters', 5)
+    gmm_init        = getattr(self.cfg, 'gmm_init', 'kmeans++')
+    gmm_kmeans_iters = getattr(self.cfg, 'gmm_kmeans_iters', 0)
 
     B         = u_mean.shape[0]
     gmm_noise = torch.randn(B, gmm_num_samples, u_mean.shape[-1], device=u_mean.device)
@@ -78,7 +80,8 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     gmm_sequence = self.model.decode_sequence(gmm_u_flat, gmm_cond)
     H, A = gmm_sequence.shape[0], gmm_sequence.shape[-1]
     seq  = gmm_sequence.view(H, B, gmm_num_samples, A)
-    mu_fixed, Sigma_fixed, pi_fixed, gmm_metrics = _fit_gmm_em(seq[0:1], K=gmm_K, n_iters=gmm_n_iters)
+    mu_fixed, Sigma_fixed, pi_fixed, gmm_metrics = _fit_gmm_em(
+        seq[0:1], K=gmm_K, n_iters=gmm_n_iters, init=gmm_init, kmeans_iters=gmm_kmeans_iters)
 
     # Reparameterized sample from the DCEM distribution: gradients on the
     # decoder loss flow back through both u_mean and u_std, not just u_mean.
