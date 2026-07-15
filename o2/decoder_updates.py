@@ -77,9 +77,9 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     gmm_u_flat = gmm_u.reshape(B * gmm_num_samples, -1)
     gmm_cond   = cond_dec.unsqueeze(1).repeat(1, gmm_num_samples, 1).reshape(B * gmm_num_samples, -1)
 
-    gmm_sequence = self.model.decode_sequence(gmm_u_flat, gmm_cond)
-    H, A = gmm_sequence.shape[0], gmm_sequence.shape[-1]
-    seq  = gmm_sequence.view(H, B, gmm_num_samples, A)
+    _, gmm_pretanh = self.model.decode_sequence(gmm_u_flat, gmm_cond, return_pretanh=True)
+    H, A = gmm_pretanh.shape[0], gmm_pretanh.shape[-1]
+    seq  = gmm_pretanh.view(H, B, gmm_num_samples, A)
     mu_fixed, Sigma_fixed, pi_fixed, gmm_metrics = _fit_gmm_em(
         seq[0:1], K=gmm_K, n_iters=gmm_n_iters, init=gmm_init, kmeans_iters=gmm_kmeans_iters)
 
@@ -95,9 +95,17 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
 
     # Diversity penalty — score the *value-optimized* sample against the
     # frozen mixture (first horizon step only, matching what it was fit on),
-    # rather than re-scoring the fresh fit samples themselves.
-    x_eval       = sequence[0:1].unsqueeze(2)  # [1, B, 1, A]
-    log_det_loss = _gmm_log_prob(x_eval, mu_fixed, Sigma_fixed, pi_fixed).squeeze(0).squeeze(-1)  # [B]
+    # rather than re-scoring the fresh fit samples themselves. The fit and
+    # eval point both live in pretanh space (clean gradients, no tanh
+    # saturation in the backward pass); the tanh change-of-variables
+    # Jacobian term converts the pretanh-space log-density back to the
+    # action-space log-density the penalty is meant to represent, and
+    # *grows* rather than vanishes as saturation increases (see
+    # o2/gmm_diversity.py module docstring discussion).
+    x_eval        = pretanh[0:1].unsqueeze(2)  # [1, B, 1, A]
+    log_p_pretanh = _gmm_log_prob(x_eval, mu_fixed, Sigma_fixed, pi_fixed).squeeze(0).squeeze(-1)  # [B]
+    jacobian_term = torch.log(1 - sequence[0:1].pow(2) + 1e-6).sum(-1).squeeze(0)  # [B]
+    log_det_loss  = log_p_pretanh - jacobian_term
     gmm_metrics['gmm_diversity'] = -log_det_loss.detach().mean().item()
 
     value = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
