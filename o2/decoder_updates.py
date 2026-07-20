@@ -48,8 +48,9 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
 
     Returns:
         dict with keys: decoder_loss, decoder_grad_norm, value_mean,
-                        saturation, z_norm, u_norm, hidden_norm, plus the
-                        GMM diversity metrics (gmm_diversity, gmm_pi_balance, ...)
+                        saturation, saturation_first, z_norm, u_norm,
+                        hidden_norm, plus the GMM diversity metrics
+                        (gmm_diversity, gmm_pi_balance, ...)
     """
     self.action_dec_optim.zero_grad()
 
@@ -92,6 +93,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     u_norm            = u.norm(dim=-1).mean().item()
     sequence, pretanh = self.model.decode_sequence(u, cond_dec, return_pretanh=True)
     saturation        = pretanh.abs().mean().item()
+    saturation_first  = pretanh[0].abs().mean().item()
 
     # Diversity penalty — score the *value-optimized* sample against the
     # frozen mixture (first horizon step only, matching what it was fit on),
@@ -151,6 +153,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
         'decoder_grad_norm': grad_norm.item(),
         'value_mean':        value.mean().item(),
         'saturation':        saturation,
+        'saturation_first':  saturation_first,
         'z_norm':            z_norm,
         'u_norm':            u_norm,
         'hidden_norm':       self.model._action_decoder._hidden_norm,

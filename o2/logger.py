@@ -22,6 +22,7 @@ class CSVLogger:
         'episode', 'step', 'env_step', 'total_time', 'episode_reward',
         'horizon', 'std', 'ep_time', 'update_time',
         'phase', 'decoder_time', 'decoder_loss', 'decoder_grad_norm', 'saturation',
+        'saturation_first',
         'consistency_loss', 'reward_loss', 'value_loss',
         'pi_loss', 'total_loss', 'weighted_loss', 'grad_norm',
     ]
