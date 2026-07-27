@@ -1,5 +1,5 @@
-exp_name: TDMPC_o2_diversity_Kmeans_init_try2
-wandb_notes: "Try of differnt EM init techniques and hyperparamters"
+exp_name: TDMPC_o2_diversity_layernorm_on_conditioning
+wandb_notes: "Added Layernorm to the state input of the decoder to see if it helps with the scale of the inputs received by the network and the resulting saturation"
 
 # MuJoCo step thresholds — o2 phase starts immediately at step 0
 mujoco_train_steps:          80000
@@ -18,14 +18,14 @@ lml_temperature:    20
 use_latent_state:   True 
 use_raw_obs:       False
 decoder_uniform_sampling: False
-diversity_coeff:   0.1
+diversity_coeff:   0.05
 
 latent_action_dim: 128
-lambda_gae:        0.5
-log_det_target:   -4
+lambda_gae:        0.1
 
 
 gmm_num_samples: 128
 gmm_K: 2
 gmm_n_iters: 5
-gmm_init: 'forgy' # 'kmeans++' (default),
+gmm_init: 'kmeans++' # 'kmeans++' (default),
+gmm_kmeans_iters: 1

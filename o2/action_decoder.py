@@ -32,43 +32,42 @@ def build_action_decoder(cfg, use_latent_state=True, use_raw_obs=False):
         use_raw_obs:      Concatenate raw observation to u (overrides use_latent_state).
 
     Returns:
-        nn.Sequential: the action decoder (Linear -> ReLU -> Linear).
+        (action_decoder, cond_norm):
+            action_decoder: nn.Sequential, the decoder (Linear -> ReLU -> Linear).
+            cond_norm:      LayerNorm over the conditioning signal only (not
+                            `u`), or None when there's no conditioning signal
+                            (both flags False). The TOLD encoder's `z` has no
+                            output normalisation, so its scale can drift
+                            arbitrarily over training; cond_norm decouples the
+                            decoder's input scale from that drift.
+                            Kept separate from action_decoder rather than
+                            attached to it as an attribute — nn.Sequential's
+                            forward() just iterates every entry in its
+                            _modules dict, so an nn.Module attribute assigned
+                            onto it becomes an extra "layer" silently run on
+                            the decoder's own output, not on cond.
     """
     if use_raw_obs:
-        input_dim = cfg.latent_action_dim + cfg.obs_shape[0]
+        cond_dim = cfg.obs_shape[0]
     elif use_latent_state:
-        input_dim = cfg.latent_action_dim + cfg.latent_dim
+        cond_dim = cfg.latent_dim
     else:
-        input_dim = cfg.latent_action_dim
+        cond_dim = 0
 
     action_decoder = nn.Sequential(
-        nn.Linear(input_dim, 256),
+        nn.Linear(cfg.latent_action_dim + cond_dim, 256),
         nn.ReLU(),
         nn.Linear(256, cfg.horizon * cfg.action_dim),
     )
     action_decoder._hidden_norm = 0.0
+    cond_norm = nn.LayerNorm(cond_dim) if cond_dim > 0 else None
 
     def _hidden_norm_hook(module, input, output):
         action_decoder._hidden_norm = output.norm(dim=-1).mean().item()
 
     action_decoder[1].register_forward_hook(_hidden_norm_hook)
 
-    return action_decoder
-
-
-def build_value_network(latent_dim, mlp_dim):
-    """Build value network with zero-initialized output layer."""
-    V_net = nn.Sequential(
-        nn.Linear(latent_dim, mlp_dim),
-        nn.LayerNorm(mlp_dim),
-        nn.Tanh(),
-        nn.Linear(mlp_dim, mlp_dim),
-        nn.ELU(),
-        nn.Linear(mlp_dim, 1)
-    )
-    nn.init.zeros_(V_net[-1].weight)
-    nn.init.zeros_(V_net[-1].bias)
-    return V_net
+    return action_decoder, cond_norm
 
 
 def decode_sequence(self, u, cond, return_pretanh=False):
@@ -91,6 +90,7 @@ def decode_sequence(self, u, cond, return_pretanh=False):
     B = u.size(0)
     use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
     if use_raw_obs or self.cfg.use_latent_state:
+        cond      = self._cond_norm(cond)
         dec_input = torch.cat([u, cond], dim=-1)
     else:
         dec_input = u
@@ -111,11 +111,14 @@ def track_TOLD_grad(self, enable=True):
 
 
 def track_O2_grad(self, enable=True):
-    for m in [self._action_decoder, self._V]:
+    modules = [self._action_decoder]
+    if self._cond_norm is not None:
+        modules.append(self._cond_norm)
+    for m in modules:
         h.set_requires_grad(m, enable)
         if not enable:
             # O2 params are not in self.optim, so optim.zero_grad() never clears them.
-            # Zeroing here prevents stale decoder/V gradients from inflating
+            # Zeroing here prevents stale decoder gradients from inflating
             # clip_grad_norm_ during TOLD updates and causing over-clipping.
             for p in m.parameters():
                 p.grad = None

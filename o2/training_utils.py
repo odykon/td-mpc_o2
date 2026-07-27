@@ -6,7 +6,6 @@ Shared training utilities used across all training scripts.
 Functions:
     update_tdmpc       — update the TOLD world model (works with TDMPC and TDMPC_O2)
     update_decoder     — off-policy DDPG decoder update loop
-    update_decoder_pg  — on-policy PG decoder update loop
 """
 
 import random
@@ -132,49 +131,3 @@ def update_decoder(agent, buffer, cfg, step):
     agent.model.track_TOLD_grad(True)
     n_updates = agent.cfg.decoder_updates
     return {k: v / n_updates for k, v in accum.items()} | {'grad_tracker': last_grad_tracker, 'decoder_grad_norm_max': grad_norm_max}
-
-
-def update_decoder_pg(agent, episode, step, alpha_v=0.0):
-    """
-    On-policy PG decoder update loop.
-
-    Iterates over batches from the latest PGEpisode (on-policy transitions),
-    runs DCEM on each batch of observations to get the current latent
-    distribution, then calls PG_withV with the diversity loss from DCEM
-    as the entropy bonus.
-
-    Args:
-        agent:   TDMPC_O2 instance
-        episode: PGEpisode (finalized) from the most recent rollout
-        step:    current global step
-        alpha_v: entropy coefficient (e.g. from a variance schedule)
-
-    Returns:
-        dict with averaged metrics across all update iterations.
-    """
-    agent.model.track_TOLD_grad(False)
-
-    accum             = {}
-    n_batches         = 0
-    last_grad_tracker = []
-    for obs, reward, obs_t1, latent_action in episode.sample_batches(
-            batch_size=agent.cfg.dcem_batch_size, shuffle=True):
-
-        with torch.no_grad():
-            z_t  = agent.model.h(obs)
-            z_t1 = agent.model.h(obs_t1)
-        _, u_mean, u_std, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
-
-        pg_metrics = agent.PG_withV(z_t, z_t1, u_mean, u_std, reward, latent_action,
-                                    alpha_v)
-        v_loss     = agent.V_net_update(reward, z_t, z_t1)
-
-        metrics = {**pg_metrics, 'v_loss': v_loss.item(), **diversity}
-        for k, v in metrics.items():
-            accum[k] = accum.get(k, 0.0) + (v.item() if hasattr(v, 'item') else v)
-        last_grad_tracker = grad_tracker
-        n_batches += 1
-
-    agent.model.track_TOLD_grad(True)
-    n = max(n_batches, 1)
-    return {k: v / n for k, v in accum.items()} | {'grad_tracker': last_grad_tracker}

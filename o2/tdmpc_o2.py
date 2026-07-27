@@ -20,31 +20,32 @@ from copy import deepcopy
 
 from algorithm.tdmpc import TDMPC
 from o2.action_decoder import (build_action_decoder, decode_sequence,
-                                track_TOLD_grad, track_O2_grad,
-                                build_value_network)
+                                track_TOLD_grad, track_O2_grad)
 from o2.planning import DCEM, CEM_in_latent, CEM_in_latent_open_loop
-from o2.decoder_updates import update_decoder_DDPG, PG_withV, action_entropy_loss, V_net_update
+from o2.decoder_updates import update_decoder_DDPG
 
 
 class TDMPC_O2(TDMPC):
     def __init__(self, cfg):
         super().__init__(cfg)
 
-        decoder = build_action_decoder(
+        decoder, cond_norm = build_action_decoder(
             cfg,
             use_latent_state=cfg.use_latent_state,
             use_raw_obs=getattr(cfg, 'use_raw_obs', False),
-        ).to(self.device)
+        )
+        decoder = decoder.to(self.device)
+        cond_norm = cond_norm.to(self.device) if cond_norm is not None else None
 
         self.model._action_decoder        = decoder
+        self.model._cond_norm             = cond_norm
         self.model_target._action_decoder = deepcopy(decoder).to(self.device)
-        self.action_dec_optim = torch.optim.Adam(
-            self.model._action_decoder.parameters(), lr=cfg.lr
-        )
+        self.model_target._cond_norm      = deepcopy(cond_norm).to(self.device) if cond_norm is not None else None
 
-        self.model._V        = build_value_network(cfg.latent_dim, cfg.mlp_dim).to(self.device)
-        self.model_target._V = deepcopy(self.model._V).to(self.device)
-        self.V_optim = torch.optim.Adam(self.model._V.parameters(), lr=cfg.lr)
+        dec_params = list(self.model._action_decoder.parameters())
+        if self.model._cond_norm is not None:
+            dec_params += list(self.model._cond_norm.parameters())
+        self.action_dec_optim = torch.optim.Adam(dec_params, lr=cfg.lr)
 
         self.log_det_target = getattr(cfg, 'log_det_target', -float(cfg.action_dim))
         init_coeff = max(getattr(cfg, 'diversity_coeff', 0.01), 1e-8)
@@ -109,12 +110,3 @@ class TDMPC_O2(TDMPC):
 
     def update_decoder_DDPG(self, *args, **kwargs):
         return update_decoder_DDPG(self, *args, **kwargs)
-
-    def PG_withV(self, *args, **kwargs):
-        return PG_withV(self, *args, **kwargs)
-
-    def action_entropy_loss(self, *args, **kwargs):
-        return action_entropy_loss(self, *args, **kwargs)
-
-    def V_net_update(self, *args, **kwargs):
-        return V_net_update(self, *args, **kwargs)
