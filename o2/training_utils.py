@@ -5,7 +5,8 @@ Shared training utilities used across all training scripts.
 
 Functions:
     update_tdmpc       — update the TOLD world model (works with TDMPC and TDMPC_O2)
-    update_decoder     — off-policy DDPG decoder update loop
+    update_decoder     — off-policy decoder update loop (stochastic/SAC-style)
+    finalize_decoder   — standalone deterministic decoder finalization pass
 """
 
 import random
@@ -97,7 +98,7 @@ def update_decoder(agent, buffer, cfg, step):
     Off-policy DDPG decoder update loop.
 
     Freezes TOLD, samples batches from the buffer, runs DCEMethod_v2 to get
-    differentiable latent action means, then calls update_decoder_DDPG.
+    differentiable latent action means, then calls update_decoder_stoch.
 
     Args:
         agent:  TDMPC_O2 instance
@@ -111,7 +112,6 @@ def update_decoder(agent, buffer, cfg, step):
     """
     agent.model.track_TOLD_grad(False)
     horizon = int(linear_schedule(cfg.horizon_schedule, step))
-
     use_is_weights    = getattr(agent.cfg, 'use_is_weights', False)
     uniform_sampling  = getattr(agent.cfg, 'decoder_uniform_sampling', False)
     accum             = {}
@@ -121,7 +121,7 @@ def update_decoder(agent, buffer, cfg, step):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
                                             use_is_weights=use_is_weights, uniform=uniform_sampling)
         _, u_mean, u_std, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
-        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, u_std=u_std)
+        metrics = agent.update_decoder_stoch(obs, u_mean, horizon, weights, u_std=u_std)
         metrics.update(diversity)
         grad_norm_max = max(grad_norm_max, metrics['decoder_grad_norm'])
         for k, v in metrics.items():
@@ -131,3 +131,42 @@ def update_decoder(agent, buffer, cfg, step):
     agent.model.track_TOLD_grad(True)
     n_updates = agent.cfg.decoder_updates
     return {k: v / n_updates for k, v in accum.items()} | {'grad_tracker': last_grad_tracker, 'decoder_grad_norm_max': grad_norm_max}
+
+
+def finalize_decoder(agent, buffer, cfg, step, num_updates):
+    """
+    Deterministic decoder finalization pass.
+
+    Same DCEM → decoder-update loop as update_decoder, but calls
+    update_decoder_det instead of update_decoder_stoch: no reparameterized
+    sampling, no GMM diversity fit, no saturation penalty — just u_mean
+    optimized directly against the GAE value estimate. Intended to be called
+    once, standalone (e.g. from a notebook), to polish the decoder at the end
+    of training rather than as part of the per-episode training loop.
+
+    Args:
+        agent:       TDMPC_O2 instance
+        buffer:      ReplayBuffer
+        cfg:         OmegaConf config
+        step:        step to evaluate horizon_schedule at
+        num_updates: number of DCEM + decoder-update iterations to run
+
+    Returns:
+        dict with averaged metrics across all update iterations.
+    """
+    agent.model.track_TOLD_grad(False)
+    horizon = int(linear_schedule(cfg.horizon_schedule, step))
+    use_is_weights   = getattr(agent.cfg, 'use_is_weights', False)
+    uniform_sampling = getattr(agent.cfg, 'decoder_uniform_sampling', False)
+    accum = {}
+    for _ in range(num_updates):
+        obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
+                                            use_is_weights=use_is_weights, uniform=uniform_sampling)
+        _, u_mean, _, _, _, _, diversity = agent.DCEM(obs, step=step)
+        metrics = agent.update_decoder_det(obs, u_mean, horizon, weights)
+        metrics.update(diversity)
+        for k, v in metrics.items():
+            accum[k] = accum.get(k, 0.0) + v
+
+    agent.model.track_TOLD_grad(True)
+    return {k: v / num_updates for k, v in accum.items()}

@@ -248,3 +248,41 @@ def _gmm_log_prob(x, mu, Sigma, pi):
     log_lik = -0.5 * (A * TWO_PI.log() + log_det.unsqueeze(2) + mahal)  # [H, B, M, K]
     log_p   = torch.logsumexp(log_lik + (pi + 1e-8).log().unsqueeze(2), dim=-1)  # [H, B, M]
     return log_p
+
+
+def _gmm_log_prob_squashed(pretanh, mu, Sigma, pi):
+    """
+    Log-density of tanh(pretanh) under the tanh-squashed GMM.
+
+    If U ~ GMM(mu, Sigma, pi) (fit in pretanh space) and A = tanh(U)
+    (elementwise), this returns log p_A(a) via the change-of-variables
+    formula. tanh's Jacobian is diagonal (elementwise transform), with
+    entries d/du tanh(u) = 1 - tanh(u)^2, so:
+
+        log p_A(a) = log p_U(u) - sum_i log(1 - tanh(u_i)^2)
+
+    p_U(u) = sum_k pi_k N(u; mu_k, Sigma_k) is a sum over components, but the
+    Jacobian term doesn't depend on which component k is doing the scoring —
+    it's a property of the transformation at u, shared by every component —
+    so it factors out of the logsumexp over components and is equivalent to
+    subtract once after the mixture log-density rather than fold into each
+    component's log-likelihood individually:
+
+        logsumexp_k(x_k - c) == logsumexp_k(x_k) - c   for c not depending on k.
+
+    Takes `pretanh` (u) rather than the squashed point a + an inverse atanh:
+    the caller already has both from decode_sequence(return_pretanh=True),
+    and pretanh is the numerically exact one — atanh(tanh(u)) round-trips
+    poorly as |u| grows and tanh(u) saturates toward +-1.
+
+    Args:
+        pretanh: [H, B, M, A] pre-tanh points (u), gradient flows through this.
+        mu, Sigma, pi: frozen GMM params in pretanh space, from `_fit_gmm_em`.
+
+    Returns:
+        log_p: [H, B, M] differentiable log-density of tanh(pretanh) under
+               the squashed mixture.
+    """
+    log_p_u       = _gmm_log_prob(pretanh, mu, Sigma, pi)
+    jacobian_term = torch.log(1 - torch.tanh(pretanh).pow(2) + 1e-6).sum(dim=-1)
+    return log_p_u - jacobian_term

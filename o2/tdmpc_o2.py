@@ -10,7 +10,8 @@ Adds to TDMPC:
     - CEM_in_latent_open_loop: CEM_in_latent variant that also returns the full
                        decoded sequence + scheduled horizon, for open-loop
                        (plan once, execute a:0..a:H-1, then replan) rollouts
-    - Decoder update:  off-policy DDPG with GAE value targets
+    - Decoder update:  off-policy, GAE value targets — DDPG-style (value only)
+                       or SAC-style (value + GMM diversity + saturation penalty)
 """
 
 import math
@@ -22,7 +23,7 @@ from algorithm.tdmpc import TDMPC
 from o2.action_decoder import (build_action_decoder, decode_sequence,
                                 track_TOLD_grad, track_O2_grad)
 from o2.planning import DCEM, CEM_in_latent, CEM_in_latent_open_loop
-from o2.decoder_updates import update_decoder_DDPG
+from o2.decoder_updates import update_decoder_det, update_decoder_stoch
 
 
 class TDMPC_O2(TDMPC):
@@ -47,8 +48,8 @@ class TDMPC_O2(TDMPC):
             dec_params += list(self.model._cond_norm.parameters())
         self.action_dec_optim = torch.optim.Adam(dec_params, lr=cfg.lr)
 
-        self.log_det_target = getattr(cfg, 'log_det_target', -float(cfg.action_dim))
-        init_coeff = max(getattr(cfg, 'diversity_coeff', 0.01), 1e-8)
+        self.log_det_target = getattr(cfg, 'log_det_target', -0.8 * float(cfg.action_dim))
+        init_coeff = max(getattr(cfg, 'diversity_coeff', 0.5), 1e-8)
         self.log_alpha_diversity = torch.nn.Parameter(
             torch.tensor([math.log(init_coeff)], device=self.device)
         )
@@ -108,5 +109,8 @@ class TDMPC_O2(TDMPC):
     def CEM_in_latent_open_loop(self, *args, **kwargs):
         return CEM_in_latent_open_loop(self, *args, **kwargs)
 
-    def update_decoder_DDPG(self, *args, **kwargs):
-        return update_decoder_DDPG(self, *args, **kwargs)
+    def update_decoder_det(self, *args, **kwargs):
+        return update_decoder_det(self, *args, **kwargs)
+
+    def update_decoder_stoch(self, *args, **kwargs):
+        return update_decoder_stoch(self, *args, **kwargs)

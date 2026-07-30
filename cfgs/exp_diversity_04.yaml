@@ -1,14 +1,16 @@
-exp_name: TDMPC_o2_diversity_layernorm_on_conditioning
-wandb_notes: "Added Layernorm to the state input of the decoder to see if it helps with the scale of the inputs received by the network and the resulting saturation"
+exp_name: lets_see_what_we_have
+wandb_notes: "Trying out pretanh GMM wihtout sat penalty in all envs with tartget 0.8action_dim"
 
 # MuJoCo step thresholds — o2 phase starts immediately at step 0
-mujoco_train_steps:          80000
+mujoco_train_steps:          100000
 mujoco_seed_steps:           4000
 mujoco_decoder_start_steps:  0
 mujoco_latent_start_steps:   0
 
 latent_num_samples: 32
 latent_num_elites: 8
+iterations: 6 
+dcem_iterations: 5
 
 # Decoder training
 decoder_updates:    80
@@ -18,14 +20,13 @@ lml_temperature:    20
 use_latent_state:   True 
 use_raw_obs:       False
 decoder_uniform_sampling: False
-diversity_coeff:   0.05
-
+diversity_coeff:   0.5
 latent_action_dim: 128
-lambda_gae:        0.1
+lambda_gae:        0.5
 
 
-gmm_num_samples: 128
+gmm_num_samples: 512
 gmm_K: 2
-gmm_n_iters: 5
+gmm_n_iters: 7
 gmm_init: 'kmeans++' # 'kmeans++' (default),
 gmm_kmeans_iters: 1

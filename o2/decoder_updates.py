@@ -1,26 +1,90 @@
 """
 decoder_updates.py
 ------------------
-Off-policy DDPG-style decoder update with GAE-weighted multi-horizon value targets.
+Off-policy decoder update loops, GAE-weighted multi-horizon value targets:
+    update_decoder_det   — pure DDPG-style, value only, deterministic
+    update_decoder_stoch — SAC-style, value + GMM diversity + saturation penalty
 """
 
 import torch
 import torch.nn.utils as utils
 
-from o2.gmm_diversity import _fit_gmm_em, _gmm_log_prob
+from o2.gmm_diversity import _fit_gmm_em, _gmm_log_prob_squashed
 
 
-def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
+def update_decoder_det(self, obs, u_mean, horizon, weights=None):
     """
-    DDPG-style decoder update using a GAE-weighted sum of n-step TD targets.
+    Pure DDPG-style decoder update: optimizes u_mean against the GAE value
+    estimate only. No GMM diversity fit, no saturation penalty, no alpha
+    tuning — u_mean is decoded deterministically (no reparameterized noise)
+    and the value cost is backpropagated straight into the decoder weights.
+
+    Args:
+        obs:     [B, obs_dim] observation batch from the replay buffer.
+        u_mean:  [B, latent_action_dim] differentiable latent action mean
+                 obtained from DCEM().
+        horizon: int planning horizon (used as GAE rollout length).
+        weights: optional [B] importance-sampling weights.
+
+    Returns:
+        dict with keys: decoder_loss, decoder_grad_norm, value_mean,
+                        z_norm, u_norm, hidden_norm, lambda_gae
+    """
+    self.action_dec_optim.zero_grad()
+
+    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
+    z        = self.model.h(obs).detach()
+    cond_dec = obs if use_raw_obs else self.model_target.h(obs).detach()
+    z_norm   = z.norm(dim=-1).mean().item()
+    u_norm   = u_mean.norm(dim=-1).mean().item()
+
+    sequence = self.model.decode_sequence(u_mean, cond_dec)
+    value    = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
+    lam      = getattr(self.cfg, 'lambda_gae', 0.5)
+
+    value_cost = -value
+    cost = (value_cost * weights).mean() if weights is not None else value_cost.mean()
+
+    cost.backward()
+    grad_norm = torch.sqrt(sum(
+        p.grad.norm() ** 2
+        for p in self.model._action_decoder.parameters() if p.grad is not None
+    ))
+    dec_grad_clip = getattr(self.cfg, 'dec_grad_clip_norm', 10)
+    if dec_grad_clip:
+        utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=dec_grad_clip)
+    self.action_dec_optim.step()
+
+    return {
+        'decoder_loss':      cost.item(),
+        'decoder_grad_norm': grad_norm.item(),
+        'value_mean':        value.mean().item(),
+        'z_norm':            z_norm,
+        'u_norm':            u_norm,
+        'hidden_norm':       self.model._action_decoder._hidden_norm,
+        'lambda_gae':        lam,
+    }
+
+
+def update_decoder_stoch(self, obs, u_mean, horizon, weights=None, u_std=None):
+    """
+    SAC-style decoder update using a GAE-weighted sum of n-step TD targets.
 
     V_λ = Σ_h w_h * V_h, where
         w_h = (1 - λ) * λ^(h-1)  for h < gae_horizons
         w_H = λ^(H-1)             (absorbs remaining weight; all weights sum to 1)
 
     Config: lambda_gae (default 0.5), gae_horizons (default 5).
-    Saturation is penalised via the tanh Jacobian (see saturation_coeff,
-    default 0.0 — disabled unless set) in addition to being monitored.
+    Two independent penalties are added to the value cost:
+      - diversity_cost = alpha * log_det_loss, the squashed-GMM log-density
+        (_gmm_log_prob_squashed) of the value-optimized sample at step 0 —
+        the GMM is fit in pretanh space so it can see saturation directly
+        (a fit on the squashed action can't distinguish two points both
+        sitting at +-1 the same way pretanh can).
+      - saturation_cost = future_sat_coeff * future_jacobian_penalty, the
+        tanh-Jacobian term averaged over horizon steps 1..H-1 (independent
+        of step 0, which the diversity term already covers) — fixed
+        (non-learned) coefficient, does not go through alpha.
 
     Also fits a GMM (o2/gmm_diversity.py) here, on fresh samples drawn from
     the final u_mean/u_std, rather than in DCEM on the last CEM iteration's
@@ -48,9 +112,10 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
 
     Returns:
         dict with keys: decoder_loss, decoder_grad_norm, value_mean,
-                        saturation, saturation_cost, saturation_coeff,
-                        z_norm, u_norm, hidden_norm, plus the GMM diversity
-                        metrics (gmm_diversity, gmm_pi_balance, ...)
+                        diversity_cost, diversity_alpha, saturation_cost,
+                        future_sat_coeff, saturation, z_norm, u_norm,
+                        hidden_norm, plus the GMM diversity metrics
+                        (gmm_diversity, future_sat_penalty, gmm_pi_balance, ...)
     """
     self.action_dec_optim.zero_grad()
 
@@ -59,11 +124,11 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     cond_dec          = obs if use_raw_obs else self.model_target.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
 
-    gmm_num_samples = getattr(self.cfg, 'gmm_num_samples', self.cfg.latent_num_samples)
+    gmm_num_samples = getattr(self.cfg, 'gmm_num_samples', 512)
     gmm_K           = getattr(self.cfg, 'gmm_K', 2)
-    gmm_n_iters     = getattr(self.cfg, 'gmm_n_iters', 5)
+    gmm_n_iters     = getattr(self.cfg, 'gmm_n_iters', 7)
     gmm_init        = getattr(self.cfg, 'gmm_init', 'kmeans++')
-    gmm_kmeans_iters = getattr(self.cfg, 'gmm_kmeans_iters', 0)
+    gmm_kmeans_iters = getattr(self.cfg, 'gmm_kmeans_iters', 1)
 
     B         = u_mean.shape[0]
     gmm_noise = torch.randn(B, gmm_num_samples, u_mean.shape[-1], device=u_mean.device)
@@ -71,9 +136,9 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     gmm_u_flat = gmm_u.reshape(B * gmm_num_samples, -1)
     gmm_cond   = cond_dec.unsqueeze(1).repeat(1, gmm_num_samples, 1).reshape(B * gmm_num_samples, -1)
 
-    gmm_sequence = self.model.decode_sequence(gmm_u_flat, gmm_cond)
-    H, A = gmm_sequence.shape[0], gmm_sequence.shape[-1]
-    seq  = gmm_sequence.view(H, B, gmm_num_samples, A)
+    _, gmm_pretanh = self.model.decode_sequence(gmm_u_flat, gmm_cond, return_pretanh=True)
+    H, A = gmm_pretanh.shape[0], gmm_pretanh.shape[-1]
+    seq  = gmm_pretanh.view(H, B, gmm_num_samples, A)
     mu_fixed, Sigma_fixed, pi_fixed, gmm_metrics = _fit_gmm_em(
         seq[0:1], K=gmm_K, n_iters=gmm_n_iters, init=gmm_init, kmeans_iters=gmm_kmeans_iters)
 
@@ -88,25 +153,29 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     pretanh.retain_grad()
     saturation        = pretanh.abs().mean().item()
 
-    # Saturation penalty — reverted for now (not applied to the loss), still
-    # computed for monitoring. See git history to reinstate: add
-    # `+ saturation_cost` back into per_sample_cost below.
-    sat_coeff        = getattr(self.cfg, 'saturation_coeff', 0.0)
-    jacobian_penalty = -torch.log(1 - sequence.pow(2) + 1e-6).sum(dim=-1).mean(dim=0)  # [B]
-    saturation_cost  = sat_coeff * jacobian_penalty
-
-    # Diversity penalty — score the *value-optimized* sample against the frozen mixture 
-    x_eval       = sequence[0:1].unsqueeze(2)  # [1, B, 1, A]
-    log_det_loss = _gmm_log_prob(x_eval, mu_fixed, Sigma_fixed, pi_fixed).squeeze(0).squeeze(-1)  # [B]
+    # Diversity penalty — squashed-GMM log-density of the value-optimized
+    # sample (first horizon step only, matching what the fit was computed on).
+    x_eval       = pretanh[0:1].unsqueeze(2)  # [1, B, 1, A]
+    log_det_loss = _gmm_log_prob_squashed(x_eval, mu_fixed, Sigma_fixed, pi_fixed).squeeze(0).squeeze(-1)  # [B]
     gmm_metrics['gmm_diversity'] = -log_det_loss.detach().mean().item()
     alpha = self.log_alpha_diversity.exp().item()
     diversity_cost  = alpha * log_det_loss if alpha > 0 else 0.0
 
+    # Saturation penalty for future steps (1..horizon-1) — independent of the
+    # diversity term above (which only covers step 0), fixed (non-learned) coefficient.
+    future_sat_coeff = getattr(self.cfg, 'future_sat_coeff', 0.0)
+    if horizon > 1:
+        future_jacobian_penalty = -torch.log(1 - sequence[1:horizon].pow(2) + 1e-6).sum(dim=-1).mean(dim=0)  # [B]
+    else:
+        future_jacobian_penalty = torch.zeros_like(log_det_loss)
+    saturation_cost = future_sat_coeff * future_jacobian_penalty
+    gmm_metrics['future_sat_penalty'] = future_jacobian_penalty.detach().mean().item()
+
     value = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
     lam   = getattr(self.cfg, 'lambda_gae', 0.5)
-    
+
     value_cost      = (-value).mean()
-    per_sample_cost = -value + diversity_cost
+    per_sample_cost = -value + diversity_cost + saturation_cost
     cost = (per_sample_cost * weights).mean() if weights is not None else per_sample_cost.mean()
 
     cost.backward()
@@ -116,7 +185,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
     ))
     seq_grad_norm     = sequence.grad.norm(dim=-1).mean().item() if sequence.grad is not None else 0.0
     pretanh_grad_norm = pretanh.grad.norm(dim=-1).mean().item() if pretanh.grad is not None else 0.0
-    dec_grad_clip = getattr(self.cfg, 'dec_grad_clip_norm', None)
+    dec_grad_clip = getattr(self.cfg, 'dec_grad_clip_norm', 10)
     if dec_grad_clip:
         utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=dec_grad_clip)
     self.action_dec_optim.step()
@@ -137,7 +206,7 @@ def update_decoder_DDPG(self, obs, u_mean, horizon, weights=None, u_std=None):
         'value_mean':        value.mean().item(),
         'saturation':        saturation,
         'saturation_cost':   saturation_cost.mean().item(),
-        'saturation_coeff':  sat_coeff,
+        'future_sat_coeff':  future_sat_coeff,
         'seq_grad_norm':     seq_grad_norm,
         'pretanh_grad_norm': pretanh_grad_norm,
         'z_norm':            z_norm,

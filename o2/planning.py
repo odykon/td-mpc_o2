@@ -39,7 +39,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
     Also computes action_var/sequence_var diagnostics from the last CEM
     iteration's samples. (GMM diversity fitting used to happen here too —
-    it now runs in update_decoder_DDPG, o2/decoder_updates.py, fit on the
+    it now runs in update_decoder_stoch, o2/decoder_updates.py, fit on the
     final u_mean/u_std instead of this iteration's pre-update samples; see
     git history for the prior version.)
 
