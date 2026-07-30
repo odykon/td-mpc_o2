@@ -72,25 +72,33 @@ PHASED_DEFAULTS = {
     'decoder_updates':  80,   # decoder updates per episode (warmup + o2)
 
     # O2 architecture
-    'latent_action_dim':  128,
+    # latent_action_dim is derived (= horizon*action_dim) once action_dim is
+    # known, in train() right after make_env(cfg) — see below.
     'decoder_init':       False,
     'use_latent_state':   True,
-    'use_raw_obs':        True,
-    'dcem_batch_size':    64,
+    'use_raw_obs':        False,
+    'dcem_batch_size':    128,
     'latent_num_samples': 32,
     'latent_num_elites':  8,
-    'lml_temperature':    1,
+    'iterations':         6,
+    'dcem_iterations':    5,
+    'lml_temperature':    20,
     'use_is_weights':     True,
-    'decoder_uniform_sampling': True,
-    'dec_grad_clip_norm': 1,
+    'decoder_uniform_sampling': False,
+    'diversity_coeff':    0.5,
+    'dec_grad_clip_norm': 10,
     'lambda_gae':         0.5,
     'use_wandb':          True,
+
+    # Flow decoder architecture
+    'flow_num_layers':  4,
+    'flow_hidden_dim':  256,
 
     # Checkpointing (W&B artifacts; None = disabled)
     'checkpoint_interval_steps': None,
 
     # Eval (one at end with video)
-    'eval_episodes': 1,
+    'eval_episodes': 5,
 
     # W&B
     'wandb_project': 'TDMPC_O2',
@@ -132,6 +140,7 @@ def train(cfg):
         )
 
     env    = make_env(cfg)
+    cfg.latent_action_dim = cfg.horizon * cfg.action_dim
     agent  = TDMPC_O2(cfg)
     buffer = ReplayBuffer(cfg)
 
@@ -256,17 +265,21 @@ def train(cfg):
             step=total_env_step,
             n_episodes=cfg.eval_episodes,
             save_dir=eval_tmp,
-            video_mode='first',
+            video_mode='best_worst',
             use_latent=(phase == 'o2'),
+            sample_final_action=True,
         )
         eval_log = {
             'eval/mean_reward': eval_metrics['mean_reward'],
             'eval/std_reward':  eval_metrics['std_reward'],
         }
         if cfg.use_wandb:
-            videos = glob.glob(os.path.join(eval_tmp, 'videos', '*.mp4'))
-            if videos:
-                eval_log['eval/video'] = wandb.Video(videos[0], fps=30, format='mp4')
+            best_videos  = glob.glob(os.path.join(eval_tmp, 'videos', '*_best_*.mp4'))
+            worst_videos = glob.glob(os.path.join(eval_tmp, 'videos', '*_worst_*.mp4'))
+            if best_videos:
+                eval_log['eval/video_best'] = wandb.Video(best_videos[0], fps=30, format='mp4')
+            if worst_videos:
+                eval_log['eval/video_worst'] = wandb.Video(worst_videos[0], fps=30, format='mp4')
             wandb.log(eval_log, step=total_env_step)
             _upload_model(agent,
                 label=f"final_{task_safe}_seed{cfg.seed}",

@@ -34,14 +34,9 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
     Runs under torch.enable_grad(). Registers a hook on u_m at each CEM
     iteration that records the gradient norm flowing back through that
-    iteration during backward(). The grad_tracker list is populated only
-    after cost.backward() is called by the caller.
-
-    Also computes action_var/sequence_var diagnostics from the last CEM
-    iteration's samples. (GMM diversity fitting used to happen here too —
-    it now runs in update_decoder_DDPG, o2/decoder_updates.py, fit on the
-    final u_mean/u_std instead of this iteration's pre-update samples; see
-    git history for the prior version.)
+    iteration during backward() (populated only after the caller calls
+    cost.backward()). Also computes action_var/sequence_var diagnostics
+    from the last CEM iteration's samples.
 
     Args:
         obs:                 [B, obs_dim] or raw numpy observation.
@@ -84,7 +79,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         u_std  = 2 * torch.ones(B, self.cfg.latent_action_dim,
                                 device=self.cfg.device, requires_grad=True)
 
-        for i in range(self.cfg.iterations):
+        for i in range(self.cfg.dcem_iterations):
             u_noise   = torch.randn(B, self.cfg.latent_num_samples,
                                     self.cfg.latent_action_dim, device=self.cfg.device)
             u_samples = u_mean.unsqueeze(1) + u_std.unsqueeze(1) * u_noise
@@ -92,11 +87,8 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
             sequence = self.model.decode_sequence(u_flat, cond_dec)
 
-            # Action diversity from last CEM iteration. Re-decode from a detached
-            # u_flat so the diversity loss's gradient reaches only this decode
-            # step (the decoder weights) and not the upstream CEM unroll (u_mean/u_std
-            # of this or earlier iterations).
-            if i == self.cfg.iterations - 1:
+            # Re-decode from detached u_flat so diversity diagnostics don't backprop into the CEM unroll.
+            if i == self.cfg.dcem_iterations - 1:
                 diversity_sequence = self.model.decode_sequence(u_flat.detach(), cond_dec)
                 N, H, A = self.cfg.latent_num_samples, diversity_sequence.shape[0], diversity_sequence.shape[-1]
                 seq     = diversity_sequence.view(H, B, N, A)
@@ -110,18 +102,11 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
             value = self.estimate_value_with_grad(z, sequence, horizon, target=use_target).view(B, self.cfg.latent_num_samples)
             median = value.median(dim=1, keepdim=True).values.detach()
             mad    = (value - median).abs().median(dim=1, keepdim=True).values.detach()
-            # Straight-through normalization + temperature: LML's forward input
-            # is the full median/MAD-normalized, temperature-scaled value (this
-            # controls selection sharpness), but the backward gradient into
-            # `value` is passed through with coefficient 1 — unscaled by either
-            # lml_temperature or 1/mad. Without this, both would multiply the
-            # backward Jacobian at every one of the `iterations` unrolled steps:
-            # lml_temperature explicitly, and 1/mad implicitly (mad shrinks as
-            # CEM's elites converge across iterations), compounding into
-            # exploding gradients.
-            #
-            # To revert to STE on temperature only (normalization left in the
-            # backward path), restore:
+            # Straight-through: LML's forward input is median/MAD-normalized and
+            # temperature-scaled (controls selection sharpness), but the backward
+            # gradient into `value` passes through with coefficient 1 — otherwise
+            # lml_temperature and 1/mad would both multiply the Jacobian at every
+            # unrolled iteration, compounding into exploding gradients.
             normalized = (value - median) / (mad + 1e-5)
             scaled     = normalized * self.cfg.lml_temperature
             lml_input  = normalized + (scaled - normalized).detach()
@@ -224,74 +209,3 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False):
         action     = sequence[0, :].squeeze_(0)
 
     return action, u_mean, u_std, latent_action, log_probs
-
-
-def CEM_in_latent_open_loop(self, obs, step=None, sample_final_action=False):
-    """
-    Same CEM logic as CEM_in_latent, but also returns the full decoded action
-    sequence and the scheduled horizon, so the caller can execute the whole
-    plan open-loop (a:0 ... a:H-1) before replanning instead of replanning
-    every env step.
-
-    Args:
-        obs:                 Raw observation.
-        step:                Current training step (for horizon schedule).
-        sample_final_action: Sample from final distribution instead of mean.
-
-    Returns:
-        action, u_mean, u_std, latent_action, log_probs, sequence, horizon
-
-        sequence: [cfg.horizon, B, action_dim] full decoded action sequence
-                  (action is just sequence[0]).
-        horizon:  scheduled planning horizon used for value estimation this
-                  call (<= cfg.horizon) — only sequence[:horizon] was actually
-                  scored by CEM; steps beyond that are decoded but unscored.
-    """
-    obs = obs if isinstance(obs, torch.Tensor) else \
-          torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-    B = obs.shape[0]
-    horizon = int(min(self.cfg.horizon, h.linear_schedule(self.cfg.horizon_schedule, step)))
-
-    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
-    self.std = h.linear_schedule(self.cfg.std_schedule, step)
-
-    with torch.no_grad():
-        z     = self.model.h(obs)
-        z     = z.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
-
-        if use_raw_obs:
-            cond_dec = obs.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
-        else:
-            z_target = self.model_target.h(obs)
-            cond_dec = z_target.unsqueeze(1).repeat(1, self.cfg.latent_num_samples, 1).view(B * self.cfg.latent_num_samples, -1)
-
-        u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device)
-        u_std  = 1 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
-
-        for i in range(self.cfg.iterations):
-            u_noise   = torch.randn(self.cfg.latent_num_samples, self.cfg.latent_action_dim,
-                                    device=self.cfg.device)
-            u_samples = u_mean.unsqueeze(0) + u_std.unsqueeze(0) * u_noise  # [N, d_u]
-
-            sequence = self.model.decode_sequence(u_samples, cond_dec)
-            value    = self.estimate_value(z, sequence, horizon).squeeze(1)  # [N]
-
-            elite_idxs    = torch.topk(value, self.cfg.latent_num_elites, dim=0).indices
-            elite_samples = u_samples[elite_idxs]
-
-            u_m = elite_samples.mean(dim=0)
-            u_s = elite_samples.std(dim=0, unbiased=False).clamp(self.std, 2)
-
-            u_mean = self.cfg.momentum * u_mean + (1 - self.cfg.momentum) * u_m
-            u_std  = u_s
-
-        dist  = torch.distributions.Normal(loc=u_mean, scale=u_std)
-        latent_action = dist.rsample() if sample_final_action else u_mean
-        latent_action = latent_action.unsqueeze(0)
-
-        log_probs  = dist.log_prob(latent_action).squeeze_(0).mean(dim=0)
-        cond_final = obs if use_raw_obs else self.model_target.h(obs)
-        sequence   = self.model.decode_sequence(latent_action, cond_final)
-        action     = sequence[0, :].squeeze_(0)
-
-    return action, u_mean, u_std, latent_action, log_probs, sequence, horizon

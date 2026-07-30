@@ -42,7 +42,6 @@ def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mod
     episode_rewards = []
     episode_frames = [] if video_mode == "best_worst" else None
 
-    # Create video folder if needed
     video_dir = None
     if save_dir and video_mode != "none":
         video_dir = os.path.join(save_dir, "videos")
@@ -55,7 +54,6 @@ def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mod
         step_in_ep = 0
         total_compute_time = 0
 
-        # Decide if this episode should record frames
         record = (video_mode == "first" and ep == 0) or (video_mode == "best_worst")
         frames = [] if record else None
 
@@ -86,28 +84,23 @@ def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mod
 
         print(f"Episode {ep+1}/{n_episodes}: Reward = {total_reward:.3f}")
 
-        # Save video if mode="first"
         if video_mode == "first" and ep == 0 and video_dir:
             video_path = os.path.join(video_dir, f"eval_step{step}_ep{ep+1:03d}.mp4")
             imageio.mimsave(video_path, frames, fps=30)
             print(f"🎥 Saved first episode video: {video_path}")
 
-    # --- Handle best/worst video saving ---
     if video_mode == "best_worst" and video_dir and n_episodes > 0:
         best_idx = int(np.argmax(episode_rewards))
         worst_idx = int(np.argmin(episode_rewards))
 
-        # Save best
         best_path = os.path.join(video_dir, f"eval_step{step}_best_ep{best_idx+1:03d}.mp4")
         imageio.mimsave(best_path, episode_frames[best_idx], fps=30)
         print(f"🏆 Saved best episode video: {best_path}")
 
-        # Save worst
         worst_path = os.path.join(video_dir, f"eval_step{step}_worst_ep{worst_idx+1:03d}.mp4")
         imageio.mimsave(worst_path, episode_frames[worst_idx], fps=30)
         print(f"💀 Saved worst episode video: {worst_path}")
 
-    # --- Compute statistics ---
     mean_reward = float(np.mean(episode_rewards))
     std_reward = float(np.std(episode_rewards))
 
@@ -181,18 +174,14 @@ def save_model_and_buffer(agent, buffer, save_dir, model_name="model", buffer_na
         buffer_name: base filename for the replay buffer
     """
 
-    # Ensure save_dir exists
     os.makedirs(save_dir, exist_ok=True)
 
-    # --- Save model weights ---
     model_path = os.path.join(save_dir, f"{model_name}.pth")
     torch.save(agent.model.state_dict(), model_path)
 
-    # --- Save replay buffer ---
     buffer_path = os.path.join(save_dir, f"{buffer_name}.pth")
     torch.save(buffer.__dict__, buffer_path)
 
-    # --- Print confirmation ---
     model_size = os.path.getsize(model_path) / 1e6
     buffer_size = os.path.getsize(buffer_path) / 1e6
     print(f"\n💾 Saved model and buffer to {save_dir}")
@@ -211,21 +200,16 @@ def save_notebook_as_py(output_path=''):
     output_path = output_path+ '/notebook.py'
 
     try:
-        # Get the notebook metadata (requires Colab environment)
-        from google.colab import _message
+        from google.colab import _message  # requires Colab environment
         notebook_data = _message.blocking_request("get_ipynb")
 
-        # Extract code cells
         cells = notebook_data['ipynb']['cells']
         code_cells = [
             "# %%\n" + "".join(cell['source'])
             for cell in cells if cell['cell_type'] == 'code'
         ]
-
-        # Combine into one script
         script_content = "\n\n".join(code_cells)
 
-        # Save to file
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("# Auto-generated from Colab Notebook\n\n")
             f.write(script_content)

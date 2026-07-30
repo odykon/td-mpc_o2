@@ -1,21 +1,13 @@
 """
-implementation/episode.py
-
+episode.py
+----------
 PGEpisode extends the original TDMPC Episode with on-policy fields needed
 for policy-gradient decoder updates (u_mean, u_std, latent_action, log_probs).
-
-Usage
------
-Replace every `Episode(cfg, obs)` call in the PG training loop with
-`PGEpisode(cfg, obs)`.  The original `Episode` class is unchanged, so
-all existing replay-buffer code keeps working without modification.
 """
 
 import torch
 
-# Import the original Episode from wherever it lives in your repo.
-# Adjust the path if your project lays it out differently.
-from algorithm.helper import Episode   # ← original TDMPC Episode
+from algorithm.helper import Episode
 
 
 class PGEpisode(Episode):

@@ -78,7 +78,8 @@ PHASED_DEFAULTS = {
     'decoder_updates':  80,   # decoder updates per episode (warmup + o2)
 
     # O2 architecture
-    'latent_action_dim':  128,
+    # latent_action_dim is derived (= horizon*action_dim) once action_dim is
+    # known, in train() right after make_env(cfg) — see below.
     'decoder_init':       False,
     'use_latent_state':   True,
     'use_raw_obs':        True,
@@ -90,6 +91,10 @@ PHASED_DEFAULTS = {
     'dec_grad_clip_norm': 1,
     'lambda_gae':         0.5,
     'use_wandb':          True,
+
+    # Flow decoder architecture
+    'flow_num_layers':  4,
+    'flow_hidden_dim':  256,
 
     # Checkpointing (W&B artifacts; None = disabled)
     'checkpoint_interval_steps': None,
@@ -137,6 +142,7 @@ def train(cfg):
         )
 
     env    = make_env(cfg)
+    cfg.latent_action_dim = cfg.horizon * cfg.action_dim
     agent  = TDMPC_O2(cfg)
     buffer = ReplayBuffer(cfg)
 
