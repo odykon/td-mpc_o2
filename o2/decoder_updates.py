@@ -28,15 +28,14 @@ def update_decoder_det(self, obs, u_mean, horizon, weights=None):
     """
     self.action_dec_optim.zero_grad()
 
-    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
     z        = self.model.h(obs).detach()
-    cond_dec = obs if use_raw_obs else self.model_target.h(obs).detach()
+    cond_dec = self.model_target.h(obs).detach()
     z_norm   = z.norm(dim=-1).mean().item()
     u_norm   = u_mean.norm(dim=-1).mean().item()
 
     sequence = self.model.decode_sequence(u_mean, cond_dec)
     value    = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
-    lam      = getattr(self.cfg, 'lambda_gae', 0.5)
+    lam      = self.cfg.lambda_gae
 
     value_cost = -value
     cost = (value_cost * weights).mean() if weights is not None else value_cost.mean()
@@ -46,7 +45,7 @@ def update_decoder_det(self, obs, u_mean, horizon, weights=None):
         p.grad.norm() ** 2
         for p in self.model._action_decoder.parameters() if p.grad is not None
     ))
-    dec_grad_clip = getattr(self.cfg, 'dec_grad_clip_norm', None)
+    dec_grad_clip = self.cfg.dec_grad_clip_norm
     if dec_grad_clip:
         utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=dec_grad_clip)
     self.action_dec_optim.step()
@@ -89,9 +88,8 @@ def update_decoder_stoch(self, obs, u_mean, horizon, weights=None, u_std=None):
     """
     self.action_dec_optim.zero_grad()
 
-    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
     z                 = self.model.h(obs).detach()
-    cond_dec          = obs if use_raw_obs else self.model_target.h(obs).detach()
+    cond_dec          = self.model_target.h(obs).detach()
     z_norm            = z.norm(dim=-1).mean().item()
 
     # Reparameterized sample: gradients flow back through both u_mean and u_std.
@@ -118,7 +116,7 @@ def update_decoder_stoch(self, obs, u_mean, horizon, weights=None, u_std=None):
     diversity_cost = alpha * log_prob_action if alpha > 0 else 0.0
 
     value = self.estimate_value_GAE(z, sequence, horizon).nan_to_num(0).squeeze(-1)
-    lam   = getattr(self.cfg, 'lambda_gae', 0.5)
+    lam   = self.cfg.lambda_gae
 
     value_cost      = (-value).mean()
     per_sample_cost = -value + diversity_cost
@@ -131,7 +129,7 @@ def update_decoder_stoch(self, obs, u_mean, horizon, weights=None, u_std=None):
     ))
     seq_grad_norm     = sequence.grad.norm(dim=-1).mean().item() if sequence.grad is not None else 0.0
     pretanh_grad_norm = pretanh.grad.norm(dim=-1).mean().item() if pretanh.grad is not None else 0.0
-    dec_grad_clip = getattr(self.cfg, 'dec_grad_clip_norm', None)
+    dec_grad_clip = self.cfg.dec_grad_clip_norm
     if dec_grad_clip:
         utils.clip_grad_norm_(self.model._action_decoder.parameters(), max_norm=dec_grad_clip)
     self.action_dec_optim.step()

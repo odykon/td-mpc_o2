@@ -1,0 +1,44 @@
+# O2 defaults — merged into every TDMPC_O2 cfg by scripts/train_o2*.py's
+# load_cfg(), underneath task yaml / custom cfg=... yaml / CLI overrides
+# (same precedence as tdmpc/cfgs/default.yaml has for base TDMPC params).
+#
+# Two O2 params are intentionally NOT here because their default is computed
+# from other cfg fields, not a fixed constant — see the getattr(...) fallback
+# at its one use site instead:
+#   log_det_target  (o2/tdmpc_o2.py)  — defaults to -horizon * action_dim
+#   latent_action_dim                — always derived as horizon * action_dim
+#                                       in train(), never a tunable default
+
+# ── decoder conditioning ──────────────────────────────────────────────────
+use_latent_state: true
+
+# ── flow decoder architecture ─────────────────────────────────────────────
+flow_num_layers: 4
+flow_hidden_dim: 256
+
+# ── CEM / DCEM planning ────────────────────────────────────────────────────
+dcem_batch_size:    128
+latent_num_samples: 32
+latent_num_elites:  8
+iterations:         6
+dcem_iterations:    5
+lml_temperature:    20
+cem_warmstart:      false
+num_pi_trajs:       0
+
+# ── Q-bootstrap (estimate_value_with_grad / estimate_value_GAE) ────────────
+latent_bootstrap:      false   # false: bootstrap via TD-MPC's pi(z, min_std) (default, unchanged)
+bootstrap_num_samples: 8
+bootstrap_num_elites:  2
+
+# ── update cadence ─────────────────────────────────────────────────────────
+told_updates:    500
+decoder_updates: 80
+decoder_update_interval: 1   # run update_decoder() every Nth episode (1 = every episode, unchanged)
+
+# ── decoder update (SAC-style) ─────────────────────────────────────────────
+use_is_weights:            true
+decoder_uniform_sampling:  false
+diversity_coeff:           0.5
+dec_grad_clip_norm:        10
+lambda_gae:                0.5

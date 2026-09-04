@@ -196,16 +196,14 @@ def load_cfg() -> OmegaConf:
         cli = OmegaConf.from_cli()
         cli_overrides = OmegaConf.create({k: v for k, v in cli.items() if k != 'cfg'})
         cfg = OmegaConf.merge(cfg, custom, cli_overrides)
+        # Evaluate arithmetic strings (e.g. "40000/4" from OmegaConf interpolation,
+        # such as a custom yaml/CLI value written as train_steps=40000/${action_repeat})
         for k, v in cfg.items():
             if isinstance(v, str):
                 match = re.match(r'(\d+)([+\-*/])(\d+)', v)
                 if match:
                     result = eval(match.group(1) + match.group(2) + match.group(3))
                     cfg[k] = int(result) if isinstance(result, float) and result.is_integer() else result
-        if cfg.get('mujoco_seed_steps', None) is not None:
-            cfg.seed_steps = cfg.mujoco_seed_steps // cfg.action_repeat
-        if cfg.get('mujoco_train_steps', None) is not None:
-            cfg.train_steps = cfg.mujoco_train_steps // cfg.action_repeat
     return cfg
 
 

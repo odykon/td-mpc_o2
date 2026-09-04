@@ -87,24 +87,22 @@ class ActionFlow(nn.Module):
         return u, logdet
 
 
-def build_action_decoder(cfg, use_latent_state=True, use_raw_obs=False):
+def build_action_decoder(cfg, use_latent_state=True):
     """
     Build the action decoder as a conditional normalizing flow.
 
     `cfg.latent_action_dim` must equal `cfg.horizon * cfg.action_dim` — the
     flow is a bijection, so input and output dimensions must match.
 
-    Conditioning modes (mutually exclusive, use_raw_obs takes priority):
-        use_raw_obs=True:      input is [u, obs]  — raw observation
-        use_latent_state=True: input is [u, z]    — encoded latent state
-        both False:            input is u only
+    Conditioning modes:
+        use_latent_state=True:  input is [u, z]  — encoded latent state
+        use_latent_state=False: input is u only
 
     Args:
         cfg:              Config with latent_action_dim, latent_dim,
-                          action_dim, horizon, obs_shape, flow_num_layers,
+                          action_dim, horizon, flow_num_layers,
                           flow_hidden_dim.
         use_latent_state: Concatenate encoded latent state z to u.
-        use_raw_obs:      Concatenate raw observation to u (overrides use_latent_state).
 
     Returns:
         (action_decoder, cond_norm):
@@ -116,16 +114,11 @@ def build_action_decoder(cfg, use_latent_state=True, use_raw_obs=False):
                             attribute) since nn.Module attributes on ActionFlow
                             would register as submodules of the flow itself.
     """
-    if use_raw_obs:
-        cond_dim = cfg.obs_shape[0]
-    elif use_latent_state:
-        cond_dim = cfg.latent_dim
-    else:
-        cond_dim = 0
+    cond_dim = cfg.latent_dim if use_latent_state else 0
 
     d = cfg.latent_action_dim
-    hidden = getattr(cfg, 'flow_hidden_dim', 256)
-    num_layers = getattr(cfg, 'flow_num_layers', 4)
+    hidden = cfg.flow_hidden_dim
+    num_layers = cfg.flow_num_layers
 
     action_decoder = ActionFlow(d, cond_dim, hidden=hidden, num_layers=num_layers)
     cond_norm = nn.LayerNorm(cond_dim) if cond_dim > 0 else None
@@ -154,8 +147,7 @@ def decode_sequence(self, u, cond, return_pretanh=False, return_logdet=False):
         logdet:  [B]                        (only if return_logdet=True)
     """
     B = u.size(0)
-    use_raw_obs = getattr(self.cfg, 'use_raw_obs', False)
-    if use_raw_obs or self.cfg.use_latent_state:
+    if self.cfg.use_latent_state:
         cond_input = self._cond_norm(cond)
     else:
         cond_input = u.new_zeros(B, 0)
@@ -171,6 +163,41 @@ def decode_sequence(self, u, cond, return_pretanh=False, return_logdet=False):
     if return_logdet:
         return actions, logdet
     return actions
+
+
+def invert_sequence(self, pretanh, cond, return_logdet=False):
+    """
+    Inverse of decode_sequence: map a pretanh action sequence back to latent u.
+
+    Used for CEM warm-starting — a previous plan's pretanh sequence, shifted
+    by one timestep, is inverted under the *current* conditioning to seed the
+    next CEM search. The conditioning must be the one the caller intends to
+    decode `u` back under (the bijection only round-trips for a matched
+    forward/inverse cond), which for warm-starting is the new state's cond,
+    not the one the original sequence was decoded from.
+
+    Args:
+        pretanh: [horizon, B, action_dim] pretanh actions.
+        cond:    [B, cond_dim] conditioning signal, same convention as
+                 decode_sequence.
+        return_logdet: if True, also return the inverse log-det Jacobian.
+
+    Returns:
+        u:      [B, latent_action_dim]
+        logdet: [B] (only if return_logdet=True)
+    """
+    horizon, B, action_dim = pretanh.shape
+    if self.cfg.use_latent_state:
+        cond_input = self._cond_norm(cond)
+    else:
+        cond_input = pretanh.new_zeros(B, 0)
+
+    x = pretanh.permute(1, 0, 2).reshape(B, horizon * action_dim)
+    u, logdet = self._action_decoder.inverse(x, cond_input)
+
+    if return_logdet:
+        return u, logdet
+    return u
 
 
 def track_TOLD_grad(self, enable=True):

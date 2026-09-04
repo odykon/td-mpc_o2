@@ -3,12 +3,13 @@
 exp_name: TDMPC_full_samples
 
 # ── Training ──────────────────────────────────────────────────────────────────
-# Set in terms of raw MuJoCo interactions — divided by action_repeat automatically.
 # action_repeat comes from the task config (e.g. walker=2, cheetah=2).
 # action_repeat: 2   # uncomment to override the task default
-# MuJoCo step thresholds — o2 phase starts immediately at step 0
-mujoco_train_steps:          100000
-mujoco_seed_steps:           4000
+# Written as raw MuJoCo interactions ÷ action_repeat (resolved once at load
+# time), so this stays comparable across tasks with different action_repeat —
+# same convention tdmpc/cfgs/tasks/humanoid.yaml uses for its own train_steps.
+train_steps: 100000/${action_repeat}
+seed_steps:  4000/${action_repeat}
 
 # ── Planning (CEM) ────────────────────────────────────────────────────────────
 iterations: 5

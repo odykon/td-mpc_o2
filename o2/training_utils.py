@@ -56,18 +56,23 @@ def set_seed(seed: int):
     torch.cuda.manual_seed_all(seed)
 
 
-def update_tdmpc(agent, buffer, step):
+def update_tdmpc(agent, buffer, step, num_updates=None):
     """
-    Update the TOLD world model for cfg.told_updates iterations.
+    Update the TOLD world model for num_updates iterations (default: cfg.told_updates).
 
     Works with both TDMPC and TDMPC_O2. When used with TDMPC_O2, ensures
     TOLD gradients are enabled and decoder gradients are disabled for the
     duration of the update.
 
     Args:
-        agent:  TDMPC or TDMPC_O2 instance
-        buffer: ReplayBuffer
-        step:   current global step
+        agent:       TDMPC or TDMPC_O2 instance
+        buffer:      ReplayBuffer
+        step:        current global step
+        num_updates: number of gradient updates to run. Defaults to
+                     agent.cfg.told_updates (fixed per-episode budget). Pass
+                     an explicit value to match tdmpc/src/train.py's own
+                     convention instead (cfg.seed_steps on the first update,
+                     cfg.episode_length on every one after).
 
     Returns:
         dict of mean loss metrics across all update iterations
@@ -77,14 +82,15 @@ def update_tdmpc(agent, buffer, step):
         agent.model.track_O2_grad(False)
 
     buffer.cfg.batch_size = agent.cfg.batch_size
-    num_updates = getattr(agent.cfg, 'told_updates', agent.cfg.episode_length)
+    if num_updates is None:
+        num_updates = agent.cfg.told_updates
     metrics = {}
     for i in range(num_updates):
         update_metrics = agent.update(buffer, step + i)
         for k, v in update_metrics.items():
             metrics[k] = metrics.get(k, 0.0) + v
     for k in metrics:
-        metrics[k] /= agent.cfg.told_updates
+        metrics[k] /= num_updates
 
     if hasattr(agent.model, 'track_O2_grad'):
         agent.model.track_O2_grad(True)
@@ -94,10 +100,10 @@ def update_tdmpc(agent, buffer, step):
 
 def update_decoder(agent, buffer, cfg, step):
     """
-    Off-policy DDPG decoder update loop.
+    Off-policy decoder update loop.
 
-    Freezes TOLD, samples batches from the buffer, runs DCEMethod_v2 to get
-    differentiable latent action means, then calls update_decoder_DDPG.
+    Freezes TOLD, samples batches from the buffer, runs DCEM to get
+    differentiable latent action means, then calls update_decoder_stoch.
 
     Args:
         agent:  TDMPC_O2 instance
@@ -112,8 +118,8 @@ def update_decoder(agent, buffer, cfg, step):
     agent.model.track_TOLD_grad(False)
     horizon = int(linear_schedule(cfg.horizon_schedule, step))
 
-    use_is_weights    = getattr(agent.cfg, 'use_is_weights', False)
-    uniform_sampling  = getattr(agent.cfg, 'decoder_uniform_sampling', False)
+    use_is_weights    = agent.cfg.use_is_weights
+    uniform_sampling  = agent.cfg.decoder_uniform_sampling
     accum             = {}
     grad_norm_max     = 0.0
     last_grad_tracker = []
@@ -121,7 +127,7 @@ def update_decoder(agent, buffer, cfg, step):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
                                             use_is_weights=use_is_weights, uniform=uniform_sampling)
         _, u_mean, u_std, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
-        metrics = agent.update_decoder_DDPG(obs, u_mean, horizon, weights, u_std=u_std)
+        metrics = agent.update_decoder_stoch(obs, u_mean, horizon, weights, u_std=u_std)
         metrics.update(diversity)
         grad_norm_max = max(grad_norm_max, metrics['decoder_grad_norm'])
         for k, v in metrics.items():
