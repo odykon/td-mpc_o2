@@ -27,7 +27,7 @@ import algorithm.helper as h
 from lml import LML
 
 
-def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
+def DCEM(self, obs, step=None, sample_final_action=False, use_target=False, init_std=2):
     """
     Differentiable CEM in latent action space with per-iteration gradient tracking.
 
@@ -43,6 +43,8 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
         sample_final_action: If True, sample from the final distribution
                              instead of using the mean.
         use_target:          If True, use the target network for value estimation.
+        init_std:            Starting search std, and the ceiling each
+                             iteration's elite std gets clamped to.
 
     Returns:
         action:        [action_dim]           first action of planned sequence.
@@ -71,7 +73,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
 
         u_mean = torch.zeros(B, self.cfg.latent_action_dim,
                              device=self.cfg.device, requires_grad=True)
-        u_std  = 2 * torch.ones(B, self.cfg.latent_action_dim,
+        u_std  = init_std * torch.ones(B, self.cfg.latent_action_dim,
                                 device=self.cfg.device, requires_grad=True)
 
         for i in range(self.cfg.dcem_iterations):
@@ -115,7 +117,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
                 (elite_weights * (u_samples - u_m.unsqueeze(1)) ** 2).sum(dim=1)
                 / (scores.sum(dim=1, keepdim=True) + 1e-9)
             )
-            u_s = u_s.clamp(self.std, 2)
+            u_s = u_s.clamp(self.std, init_std)
             
             def make_hook(iteration):
                 def record_grad(grad):
@@ -142,7 +144,7 @@ def DCEM(self, obs, step=None, sample_final_action=False, use_target=False):
     return action, u_mean, u_std, latent_action, log_probs, grad_tracker, diversity
 
 
-def CEM_in_latent(self, obs, step=None, sample_final_action=False, t0=True, num_pi_trajs=None):
+def CEM_in_latent(self, obs, step=None, sample_final_action=False, t0=True, num_pi_trajs=None, init_std=2):
     """
     Plan using vanilla (non-differentiable) CEM in latent action space.
 
@@ -164,6 +166,9 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False, t0=True, num_
         num_pi_trajs:        Number of pi trajectories to mix in each
                              iteration. Defaults to cfg.num_pi_trajs; 0
                              disables the pi-trajectory mixture.
+        init_std:            Starting search std (unless warm-started), and
+                             the ceiling each iteration's elite std gets
+                             clamped to.
 
     Returns:
         action, u_mean, u_std, latent_action, log_probs
@@ -171,13 +176,18 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False, t0=True, num_
     if num_pi_trajs is None:
         num_pi_trajs = self.cfg.num_pi_trajs
 
+    # Warm-start and pi-trajectory mixing both invert action sequences into u,
+    # which only the flow decoder supports.
+    is_flow = self.cfg.get('decoder_type', 'flow') == 'flow'
+    assert is_flow or num_pi_trajs == 0, 'num_pi_trajs > 0 needs decoder_type=flow (requires inverse)'
+
     obs = obs if isinstance(obs, torch.Tensor) else \
           torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
     B = obs.shape[0]
     horizon = int(min(self.cfg.horizon, h.linear_schedule(self.cfg.horizon_schedule, step)))
 
     self.std = h.linear_schedule(self.cfg.std_schedule, step)
-    warmstart = self.cfg.cem_warmstart
+    warmstart = self.cfg.cem_warmstart and is_flow
 
     with torch.no_grad():
         z_enc = self.model.h(obs)
@@ -221,7 +231,7 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False, t0=True, num_
             u_mean = self.model.invert_sequence(shifted, cond_single).squeeze(0)
         else:
             u_mean = torch.zeros(self.cfg.latent_action_dim, device=self.cfg.device)
-        u_std  = 2 * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
+        u_std  = init_std * torch.ones(self.cfg.latent_action_dim, device=self.cfg.device)
 
         for i in range(self.cfg.iterations):
             u_noise   = torch.randn(self.cfg.latent_num_samples, self.cfg.latent_action_dim,
@@ -236,7 +246,7 @@ def CEM_in_latent(self, obs, step=None, sample_final_action=False, t0=True, num_
             elite_samples = u_pool[elite_idxs]
 
             u_m = elite_samples.mean(dim=0)
-            u_s = elite_samples.std(dim=0, unbiased=False).clamp(self.std, 2)
+            u_s = elite_samples.std(dim=0, unbiased=False).clamp(self.std, init_std)
 
             u_mean = self.cfg.momentum * u_mean + (1 - self.cfg.momentum) * u_m
             u_std  = u_s

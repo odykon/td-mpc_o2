@@ -142,7 +142,7 @@ def train(cfg):
 def load_cfg() -> OmegaConf:
     """Same as tdmpc/src/cfg.py's parse_cfg(), plus cfgs/o2_default.yaml merged
     in underneath any real CLI overrides — TDMPC_O2 needs its decoder/CEM keys
-    (latent_num_samples, flow_num_layers, told_updates, decoder_updates, ...)
+    (latent_num_samples, dec_num_layers, told_updates, decoder_updates, ...)
     that plain tdmpc/cfgs/default.yaml doesn't define."""
     cfg = parse_cfg(CFG_PATH)
     cli = OmegaConf.from_cli()

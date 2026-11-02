@@ -12,9 +12,10 @@
 # ── decoder conditioning ──────────────────────────────────────────────────
 use_latent_state: true
 
-# ── flow decoder architecture ─────────────────────────────────────────────
-flow_num_layers: 4
-flow_hidden_dim: 256
+# ── decoder architecture ──────────────────────────────────────────────────
+decoder_type:   flow   # flow: bijective ActionFlow | mlp: plain ActionMLP (no inverse/log-det)
+dec_num_layers: 4      # flow: coupling layers | mlp: hidden layers
+dec_hidden_dim: 256
 
 # ── CEM / DCEM planning ────────────────────────────────────────────────────
 dcem_batch_size:    128

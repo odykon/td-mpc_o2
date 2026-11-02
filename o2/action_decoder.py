@@ -6,7 +6,9 @@ Conditional normalizing-flow action decoder for latent action space control.
 Provides:
     ConditionalAffineCoupling — one masked affine coupling layer
     ActionFlow            — stack of coupling layers; bijective u <-> pretanh
-    build_action_decoder  — constructs the ActionFlow (no Tanh output layer)
+    FactoredActionFlow    — first-action flow + rest-of-sequence flow conditioned on a_1
+    ActionMLP             — plain MLP alternative (non-invertible, no log-det)
+    build_action_decoder  — constructs ActionFlow or ActionMLP per cfg.decoder_type (no Tanh output layer)
     decode_sequence       — method attached to TOLD instances; applies tanh externally
     track_TOLD_grad / track_O2_grad — gradient enable/disable helpers
 """
@@ -25,7 +27,7 @@ class ConditionalAffineCoupling(nn.Module):
     bijection itself, so it doesn't affect the Jacobian.
     """
 
-    def __init__(self, d, cond_dim, mask, hidden=256):
+    def __init__(self, d, cond_dim, mask, hidden=256, zero_init=False, learnable_scale=False):
         super().__init__()
         self.register_buffer('mask', mask)
         self.net = nn.Sequential(
@@ -33,10 +35,19 @@ class ConditionalAffineCoupling(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden, 2 * d),
         )
+        if zero_init:
+            # s = t = 0 for any input -> layer starts as the exact identity
+            nn.init.zeros_(self.net[2].weight)
+            nn.init.zeros_(self.net[2].bias)
+        # per-dim bound on the log-scale, s in [-exp(log_scale), exp(log_scale)]; init 1 = plain tanh
+        self.log_scale = nn.Parameter(torch.zeros(d)) if learnable_scale else None
 
     def _scale_shift(self, x_masked, cond):
         s, t = self.net(torch.cat([x_masked, cond], dim=-1)).chunk(2, dim=-1)
-        s = torch.tanh(s) * (1 - self.mask)
+        s = torch.tanh(s)
+        if self.log_scale is not None:
+            s = s * self.log_scale.exp()
+        s = s * (1 - self.mask)
         t = t * (1 - self.mask)
         return s, t
 
@@ -58,11 +69,12 @@ class ConditionalAffineCoupling(nn.Module):
 class ActionFlow(nn.Module):
     """Stack of alternating-mask coupling layers: bijective u <-> pretanh, conditioned on `cond`."""
 
-    def __init__(self, d, cond_dim, hidden=256, num_layers=4):
+    def __init__(self, d, cond_dim, hidden=256, num_layers=4, zero_init=False, learnable_scale=False):
         super().__init__()
         parity = torch.arange(d) % 2
         self.layers = nn.ModuleList([
-            ConditionalAffineCoupling(d, cond_dim, (parity == (i % 2)).float(), hidden)
+            ConditionalAffineCoupling(d, cond_dim, (parity == (i % 2)).float(), hidden,
+                                      zero_init, learnable_scale)
             for i in range(num_layers)
         ])
         self._hidden_norm = 0.0
@@ -87,26 +99,129 @@ class ActionFlow(nn.Module):
         return u, logdet
 
 
+class FactoredActionFlow(nn.Module):
+    """
+    Two-stage autoregressive flow over a flattened [H * action_dim] sequence:
+        x_1   = first(u_1, cond)                  — first action, conditioned on state
+        x_2:H = rest(u_2:H, [cond, tanh(x_1)])    — remaining actions, conditioned on state + a_1
+    x_1 depends only on u_1, so the Jacobian is block-triangular (total log-det is the
+    sum of the two flows' log-dets) and the marginal p(a_1 | s) is exact via `first`
+    alone. Same forward/inverse interface as ActionFlow.
+    """
+
+    def __init__(self, action_dim, horizon, cond_dim, hidden=256, num_layers=4, zero_init=False,
+                 learnable_scale=False):
+        super().__init__()
+        assert horizon >= 2, 'FactoredActionFlow needs horizon >= 2'
+        self.action_dim = action_dim
+        self.first = ActionFlow(action_dim, cond_dim, hidden, num_layers, zero_init, learnable_scale)
+        self.rest = ActionFlow((horizon - 1) * action_dim, cond_dim + action_dim, hidden, num_layers,
+                               zero_init, learnable_scale)
+
+    @property
+    def _hidden_norm(self):
+        return self.first._hidden_norm
+
+    def forward(self, u, cond):
+        u1, u_rest = u[:, :self.action_dim], u[:, self.action_dim:]
+        x1, ld1 = self.first(u1, cond)
+        x_rest, ld_rest = self.rest(u_rest, torch.cat([cond, torch.tanh(x1)], dim=-1))
+        return torch.cat([x1, x_rest], dim=-1), ld1 + ld_rest
+
+    def inverse(self, x, cond):
+        x1, x_rest = x[:, :self.action_dim], x[:, self.action_dim:]
+        u1, ld1 = self.first.inverse(x1, cond)
+        u_rest, ld_rest = self.rest.inverse(x_rest, torch.cat([cond, torch.tanh(x1)], dim=-1))
+        return torch.cat([u1, u_rest], dim=-1), ld1 + ld_rest
+
+    def log_prob_first(self, a1, cond, u_mean=None, u_std=None, pretanh=None):
+        """
+        Exact log p(a_1 | s) [B]. Base is N(0, I) unless u_mean/u_std ([B or 1, action_dim],
+        e.g. the first action_dim entries of the CEM Gaussian) are given. Pass `pretanh`
+        to skip the atanh, which is ill-conditioned near |a1| = 1.
+        """
+        x1 = pretanh if pretanh is not None else torch.atanh(a1.clamp(-1 + 1e-6, 1 - 1e-6))
+        a1 = torch.tanh(x1)
+        u1, ld_inv = self.first.inverse(x1, cond)
+        u_mean = torch.zeros_like(u1) if u_mean is None else u_mean
+        u_std = torch.ones_like(u1) if u_std is None else u_std
+        log_prob_u = torch.distributions.Normal(u_mean, u_std).log_prob(u1).sum(dim=-1)
+        jacobian_term = torch.log(1 - a1.pow(2) + 1e-6).sum(dim=-1)
+        return log_prob_u + ld_inv - jacobian_term
+
+    def act_first(self, cond, u1=None, deterministic=False, return_log_prob=False):
+        """
+        Policy over the first action only (`rest` is never run). u1 ~ N(0, I) via
+        reparameterized sampling unless given; deterministic uses u1 = 0 (image of the
+        base mode, not necessarily the mode of p(a_1)).
+
+        Returns a1 [B, action_dim], plus log p(a1 | s) [B] if return_log_prob.
+        """
+        if u1 is None:
+            shape = (cond.size(0), self.action_dim)
+            u1 = cond.new_zeros(shape) if deterministic else torch.randn(shape, device=cond.device)
+        x1, ld = self.first(u1, cond)
+        a1 = torch.tanh(x1)
+        if not return_log_prob:
+            return a1
+        log_prob_u = torch.distributions.Normal(0.0, 1.0).log_prob(u1).sum(dim=-1)
+        jacobian_term = torch.log(1 - a1.pow(2) + 1e-6).sum(dim=-1)
+        return a1, log_prob_u - ld - jacobian_term
+
+
+class ActionMLP(nn.Module):
+    """
+    Plain MLP decoder [u, cond] -> pretanh. Same (x, logdet) forward interface
+    as ActionFlow so decode_sequence doesn't need to branch, but logdet is None
+    and there is no inverse — not usable with CEM warm-start, pi-trajectory
+    mixing, or update_decoder_stoch (all of which need the bijection).
+    """
+
+    def __init__(self, u_dim, cond_dim, out_dim, hidden=256, num_layers=4):
+        super().__init__()
+        layers, d = [], u_dim + cond_dim
+        for _ in range(num_layers):
+            layers += [nn.Linear(d, hidden), nn.ReLU()]
+            d = hidden
+        layers.append(nn.Linear(d, out_dim))
+        self.net = nn.Sequential(*layers)
+        self._hidden_norm = 0.0
+
+        def _hidden_norm_hook(module, input, output):
+            self._hidden_norm = output.norm(dim=-1).mean().item()
+
+        self.net[1].register_forward_hook(_hidden_norm_hook)
+
+    def forward(self, u, cond):
+        return self.net(torch.cat([u, cond], dim=-1)), None
+
+    def inverse(self, x, cond):
+        raise NotImplementedError(
+            'ActionMLP is not invertible: disable cem_warmstart / num_pi_trajs with decoder_type=mlp')
+
+
 def build_action_decoder(cfg, use_latent_state=True):
     """
-    Build the action decoder as a conditional normalizing flow.
+    Build the action decoder: a conditional normalizing flow
+    (cfg.decoder_type='flow', default) or a plain MLP (cfg.decoder_type='mlp').
 
-    `cfg.latent_action_dim` must equal `cfg.horizon * cfg.action_dim` — the
-    flow is a bijection, so input and output dimensions must match.
+    flow: `cfg.latent_action_dim` must equal `cfg.horizon * cfg.action_dim` —
+          the flow is a bijection, so input and output dimensions must match.
+    mlp:  `cfg.latent_action_dim` is free; output is still horizon * action_dim.
 
     Conditioning modes:
         use_latent_state=True:  input is [u, z]  — encoded latent state
         use_latent_state=False: input is u only
 
     Args:
-        cfg:              Config with latent_action_dim, latent_dim,
-                          action_dim, horizon, flow_num_layers,
-                          flow_hidden_dim.
+        cfg:              Config with decoder_type, latent_action_dim,
+                          latent_dim, action_dim, horizon, dec_num_layers,
+                          dec_hidden_dim.
         use_latent_state: Concatenate encoded latent state z to u.
 
     Returns:
         (action_decoder, cond_norm):
-            action_decoder: ActionFlow, bijective u <-> pretanh.
+            action_decoder: ActionFlow (bijective u <-> pretanh) or ActionMLP.
             cond_norm:      LayerNorm over the conditioning signal only (not `u`),
                             or None if there's no conditioning signal. Decouples
                             the decoder's input scale from TOLD's unnormalized z.
@@ -117,10 +232,18 @@ def build_action_decoder(cfg, use_latent_state=True):
     cond_dim = cfg.latent_dim if use_latent_state else 0
 
     d = cfg.latent_action_dim
-    hidden = cfg.flow_hidden_dim
-    num_layers = cfg.flow_num_layers
+    out_dim = cfg.horizon * cfg.action_dim
+    hidden = cfg.dec_hidden_dim
+    num_layers = cfg.dec_num_layers
+    decoder_type = cfg.get('decoder_type', 'flow')
 
-    action_decoder = ActionFlow(d, cond_dim, hidden=hidden, num_layers=num_layers)
+    if decoder_type == 'flow':
+        assert d == out_dim, f'flow decoder needs latent_action_dim == horizon * action_dim ({out_dim}), got {d}'
+        action_decoder = ActionFlow(d, cond_dim, hidden=hidden, num_layers=num_layers)
+    elif decoder_type == 'mlp':
+        action_decoder = ActionMLP(d, cond_dim, out_dim, hidden=hidden, num_layers=num_layers)
+    else:
+        raise ValueError(f"Unknown decoder_type: {decoder_type!r} (expected 'flow' or 'mlp')")
     cond_norm = nn.LayerNorm(cond_dim) if cond_dim > 0 else None
 
     return action_decoder, cond_norm

@@ -86,6 +86,8 @@ def update_decoder_stoch(self, obs, u_mean, horizon, weights=None, u_std=None):
                         saturation_step_{H-1} (monitoring only), z_norm,
                         u_norm, hidden_norm, lambda_gae
     """
+    assert self.cfg.get('decoder_type', 'flow') == 'flow', \
+        'update_decoder_stoch needs the flow log-det; use det=True with decoder_type=mlp'
     self.action_dec_optim.zero_grad()
 
     z                 = self.model.h(obs).detach()

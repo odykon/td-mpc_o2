@@ -4,6 +4,150 @@ import torch
 import numpy as np
 import imageio
 
+from o2.known_dynamics import physical_h
+
+
+def evaluate_known_value_mpc(env, agent, n_episodes=5, policy="cem",
+                              sample_final_action=False, save_dir=None, video_mode="none"):
+    """
+    Evaluate a KnownValueMPC agent and optionally save videos. Mirrors
+    evaluate_agent below but for KnownValueMPC's physical-state (z) planner
+    instead of TDMPC_O2's latent one.
+
+    Args:
+        env:         Environment (DMControl/Gym-like), same one used for training.
+        agent:       KnownValueMPC instance.
+        n_episodes:  Number of evaluation episodes.
+        policy:      Action-selection strategy:
+                       "cem"    - CEM search over the known model, bootstrapped by
+                                  V_star (agent.plan). Called "CEM" rather than
+                                  MPPI since it's hard top-k + mean/std refit, not
+                                  MPPI's soft-max trajectory weighting — same
+                                  sampling-based MPC family, different update rule.
+                       "policy" - raw pi_star(z) network, no planning/search at all.
+        sample_final_action: Only used when policy == "cem". If True, add exploration
+                     noise to the final CEM action instead of using the mean.
+        save_dir:    Directory to save videos under (optional).
+        video_mode:  "first" (save only episode 0), "all", or "none".
+
+    Returns:
+        dict with policy, mean/std reward, and per-episode rewards.
+    """
+    assert policy in {"cem", "policy"}, "policy must be one of: 'cem', 'policy'"
+    assert video_mode in {"first", "all", "none"}, "video_mode must be one of: 'first', 'all', 'none'"
+
+    video_dir = None
+    if save_dir and video_mode != "none":
+        video_dir = os.path.join(save_dir, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+
+    episode_rewards = []
+    for ep in range(n_episodes):
+        obs = env.reset()
+        z = physical_h(torch.tensor(obs, dtype=torch.float32, device=agent.device))
+        agent.reset()
+
+        record = video_mode == "all" or (video_mode == "first" and ep == 0)
+        frames = [] if record else None
+
+        done, t, total_reward = False, 0, 0.0
+        while not done:
+            with torch.no_grad():
+                if policy == "cem":
+                    a, *_ = agent.plan(z, t0=(t == 0), sample_final_action=sample_final_action)
+                else:  # "policy"
+                    a = agent.model.pi_star(z.unsqueeze(0)).squeeze(0)
+            obs, r, done, _ = env.step(a.cpu().numpy())
+            z = physical_h(torch.tensor(obs, dtype=torch.float32, device=agent.device))
+            total_reward += r
+            t += 1
+            if record:
+                try:
+                    frames.append(env.render(mode='rgb_array', height=480, width=640, camera_id=0))
+                except TypeError:
+                    frames.append(env.render(mode='rgb_array'))
+
+        episode_rewards.append(total_reward)
+        print(f"Episode {ep+1}/{n_episodes} [{policy}]: reward = {total_reward:.2f}  steps = {t}")
+
+        if record and video_dir:
+            path = os.path.join(video_dir, f"known_value_mpc_{policy}_ep{ep+1:03d}.mp4")
+            imageio.mimsave(path, frames, fps=30)
+            print(f"🎥 Saved video: {path}")
+
+    mean_reward, std_reward = float(np.mean(episode_rewards)), float(np.std(episode_rewards))
+    print(f"\n[{policy}] mean reward: {mean_reward:.2f} ± {std_reward:.2f} over {n_episodes} episodes")
+    return {"policy": policy, "mean_reward": mean_reward, "std_reward": std_reward,
+            "rewards": episode_rewards}
+
+
+def evaluate_known_decoder_mpc(env, planner, n_episodes=5, sample_final_action=False,
+                                save_dir=None, video_mode="none"):
+    """
+    Evaluate a KnownDecoderPlanner (o2.known_decoder_mpc) via CEM_in_latent
+    episode rollouts against the real env. Mirrors evaluate_known_value_mpc
+    above but for the decoder-based latent planner instead of KnownValueMPC's
+    raw per-timestep CEM — same env-loop shape, so the two are directly
+    comparable (return, and wall-clock timed around the call at the
+    notebook level) at matched horizon/sample budget.
+
+    Args:
+        env:         Environment (DMControl/Gym-like), same one used for training.
+        planner:     KnownDecoderPlanner instance.
+        n_episodes:  Number of evaluation episodes.
+        sample_final_action: If True, sample the final CEM_in_latent action
+                     from the search distribution instead of using the mean.
+        save_dir:    Directory to save videos under (optional).
+        video_mode:  "first" (save only episode 0), "all", or "none".
+
+    Returns:
+        dict with policy, mean/std reward, and per-episode rewards.
+    """
+    assert video_mode in {"first", "all", "none"}, "video_mode must be one of: 'first', 'all', 'none'"
+
+    video_dir = None
+    if save_dir and video_mode != "none":
+        video_dir = os.path.join(save_dir, "videos")
+        os.makedirs(video_dir, exist_ok=True)
+
+    episode_rewards = []
+    for ep in range(n_episodes):
+        obs = env.reset()
+        z = physical_h(torch.tensor(obs, dtype=torch.float32, device=planner.device))
+        planner.reset()
+
+        record = video_mode == "all" or (video_mode == "first" and ep == 0)
+        frames = [] if record else None
+
+        done, t, total_reward = False, 0, 0.0
+        while not done:
+            with torch.no_grad():
+                a, *_ = planner.CEM_in_latent(z.unsqueeze(0), t0=(t == 0),
+                                               sample_final_action=sample_final_action)
+            obs, r, done, _ = env.step(a.cpu().numpy())
+            z = physical_h(torch.tensor(obs, dtype=torch.float32, device=planner.device))
+            total_reward += r
+            t += 1
+            if record:
+                try:
+                    frames.append(env.render(mode='rgb_array', height=480, width=640, camera_id=0))
+                except TypeError:
+                    frames.append(env.render(mode='rgb_array'))
+
+        episode_rewards.append(total_reward)
+        print(f"Episode {ep+1}/{n_episodes} [decoder_cem]: reward = {total_reward:.2f}  steps = {t}")
+
+        if record and video_dir:
+            path = os.path.join(video_dir, f"known_decoder_mpc_ep{ep+1:03d}.mp4")
+            imageio.mimsave(path, frames, fps=30)
+            print(f"🎥 Saved video: {path}")
+
+    mean_reward, std_reward = float(np.mean(episode_rewards)), float(np.std(episode_rewards))
+    print(f"\n[decoder_cem] mean reward: {mean_reward:.2f} ± {std_reward:.2f} over {n_episodes} episodes")
+    return {"policy": "decoder_cem", "mean_reward": mean_reward, "std_reward": std_reward,
+            "rewards": episode_rewards}
+
+
 def evaluate_agent(env, agent, cfg, step, n_episodes=5, save_dir=None, video_mode="none", policy="cem_latent", sample_final_action=False):
     """
     Evaluate the agent and optionally save videos.

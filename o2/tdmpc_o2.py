@@ -20,6 +20,7 @@ from o2.action_decoder import (build_action_decoder, decode_sequence, invert_seq
                                 track_TOLD_grad, track_O2_grad)
 from o2.planning import DCEM, CEM_in_latent, latent_policy_bootstrap
 from o2.decoder_updates import update_decoder_det, update_decoder_stoch
+from o2.known_dynamics import CartpoleDynamics, known_h, known_next
 
 
 class TDMPC_O2(TDMPC):
@@ -66,6 +67,25 @@ class TDMPC_O2(TDMPC):
         self.model.invert_sequence = types.MethodType(invert_sequence, self.model)
         self.model.track_TOLD_grad = types.MethodType(track_TOLD_grad, self.model)
         self.model.track_O2_grad   = types.MethodType(track_O2_grad, self.model)
+
+        # known_dynamics: replace TOLD's learned h/next (encoder+dynamics+reward)
+        # with the exact analytic cartpole model. Q, pi, and the decoder are
+        # still trained normally against real env transitions — see
+        # o2/known_dynamics.py. cfg.latent_dim must equal 4 (the physical
+        # state dim) so Q/pi/decoder conditioning all size correctly.
+        if cfg.get('known_dynamics', False):
+            known_dyn = CartpoleDynamics(
+                dt=cfg.get('known_dt', 0.01),
+                n_substeps=cfg.get('known_n_substeps', 4),
+                force_scale=cfg.get('known_force_scale', 10.0),
+            )
+            self.model._known_dynamics = known_dyn
+            self.model_target._known_dynamics = known_dyn  # parameterless, safe to share
+
+            self.model.h    = types.MethodType(known_h, self.model)
+            self.model.next = types.MethodType(known_next, self.model)
+            self.model_target.h    = types.MethodType(known_h, self.model_target)
+            self.model_target.next = types.MethodType(known_next, self.model_target)
 
     def bootstrap_action(self, z, m, target=False):
         """Action fed to Q for the value-estimate bootstrap term.

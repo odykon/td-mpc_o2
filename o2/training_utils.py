@@ -98,18 +98,21 @@ def update_tdmpc(agent, buffer, step, num_updates=None):
     return metrics
 
 
-def update_decoder(agent, buffer, cfg, step):
+def update_decoder(agent, buffer, cfg, step, det=False):
     """
     Off-policy decoder update loop.
 
     Freezes TOLD, samples batches from the buffer, runs DCEM to get
-    differentiable latent action means, then calls update_decoder_stoch.
+    differentiable latent action means, then calls update_decoder_stoch
+    (or update_decoder_det if det=True).
 
     Args:
         agent:  TDMPC_O2 instance
         buffer: ReplayBuffer
         cfg:    OmegaConf config
         step:   current global step
+        det:    if True, use the deterministic DDPG-style update_decoder_det
+                (value only, no entropy term / alpha tuning)
 
     Returns:
         dict with averaged metrics across all update iterations, plus
@@ -127,7 +130,10 @@ def update_decoder(agent, buffer, cfg, step):
         obs, weights = sample_decoder_batch(buffer, agent.cfg.dcem_batch_size,
                                             use_is_weights=use_is_weights, uniform=uniform_sampling)
         _, u_mean, u_std, _, _, grad_tracker, diversity = agent.DCEM(obs, step=step)
-        metrics = agent.update_decoder_stoch(obs, u_mean, horizon, weights, u_std=u_std)
+        if det:
+            metrics = agent.update_decoder_det(obs, u_mean, horizon, weights)
+        else:
+            metrics = agent.update_decoder_stoch(obs, u_mean, horizon, weights, u_std=u_std)
         metrics.update(diversity)
         grad_norm_max = max(grad_norm_max, metrics['decoder_grad_norm'])
         for k, v in metrics.items():
