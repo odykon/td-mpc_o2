@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 logs/
+experiments/*
+!experiments/README.md
 results/
 .DS_Store
 notebook-3.py

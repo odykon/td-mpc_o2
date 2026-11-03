@@ -44,6 +44,7 @@ from algorithm.tdmpc import TDMPC
 from algorithm.helper import Episode, ReplayBuffer, linear_schedule
 from o2.training_utils import set_seed, update_tdmpc
 from o2.logger import CSVLogger
+from experiments_utils import make_run_dir
 
 torch.backends.cudnn.benchmark = True
 
@@ -72,10 +73,17 @@ def train(cfg):
     assert torch.cuda.is_available(), 'CUDA is required. Use a GPU runtime.'
     set_seed(cfg.seed)
 
-    work_dir = LOG_ROOT / cfg.task / cfg.modality / cfg.exp_name / str(cfg.seed)
+    # exp set -> experiments/<algo>/<task>/<exp>/<variant>_s<seed>/, otherwise the legacy logs/ layout
+    if cfg.get('exp'):
+        work_dir = make_run_dir(cfg.get('algo', 'tdmpc'), cfg.task, cfg.exp, cfg.get('variant'), cfg.seed, cfg)
+        model_file, buffer_file = 'model_final.pt', 'buffer.pth'
+    else:
+        work_dir = LOG_ROOT / cfg.task / cfg.modality / cfg.exp_name / str(cfg.seed)
+        model_file, buffer_file = 'final_model.pt', 'replay_buffer.pth'
     logger = CSVLogger(work_dir, cfg)
 
     env = make_env(cfg)
+    OmegaConf.save(cfg, work_dir / 'config.yaml')  # again, now with obs_shape / action_dim
     agent = TDMPC(cfg)
     buffer = ReplayBuffer(cfg)
 
@@ -147,8 +155,8 @@ def train(cfg):
             agent.save(ckpt_dir / f'model_{env_step}.pt')
 
     if cfg.get('save_model', False):
-        agent.save(work_dir / 'final_model.pt')
-        torch.save(buffer.__dict__, work_dir / 'replay_buffer.pth')
+        agent.save(work_dir / model_file)
+        torch.save(buffer.__dict__, work_dir / buffer_file)
         print(f'Saved model and buffer to {work_dir}')
 
     logger.close()
@@ -200,7 +208,7 @@ def load_cfg() -> OmegaConf:
         # such as a custom yaml/CLI value written as train_steps=40000/${action_repeat})
         for k, v in cfg.items():
             if isinstance(v, str):
-                match = re.match(r'(\d+)([+\-*/])(\d+)', v)
+                match = re.fullmatch(r'(\d+)([+\-*/])(\d+)', v)
                 if match:
                     result = eval(match.group(1) + match.group(2) + match.group(3))
                     cfg[k] = int(result) if isinstance(result, float) and result.is_integer() else result

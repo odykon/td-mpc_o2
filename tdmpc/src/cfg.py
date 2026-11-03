@@ -34,7 +34,7 @@ def parse_cfg(cfg_path: str) -> OmegaConf:
 	# Algebraic expressions
 	for k,v in base.items():
 		if isinstance(v, str):
-			match = re.match(r'(\d+)([+\-*/])(\d+)', v)
+			match = re.fullmatch(r'(\d+)([+\-*/])(\d+)', v)
 			if match:
 				base[k] = eval(match.group(1) + match.group(2) + match.group(3))
 				if isinstance(base[k], float) and base[k].is_integer():
